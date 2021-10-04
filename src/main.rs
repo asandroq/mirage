@@ -3,57 +3,25 @@ mod lang;
 mod nonemptyvec;
 mod sharedlist;
 
-use std::{env, fmt, fs};
+use std::{env, fs};
+use thiserror::Error;
 
+#[derive(Debug, Error)]
+enum Error {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
 
-#[derive(Debug)]
-enum ErrorKind {
-    Io(std::io::Error),
-    Lang(lang::Error),
+    #[error("Language error: {0}")]    
+    Lang(#[from] lang::Error),
+
+    #[error("Bad arguments")]
     BadArgs,
-}
-
-#[derive(Debug)]
-struct Error {
-    kind: ErrorKind,
-    msg: String,
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.msg)
-    }
-}
-
-impl From<std::io::Error> for Error {
-    fn from(io_err: std::io::Error) -> Error {
-	let msg = format!("io error: {}", io_err);
-	Error {
-	    kind: ErrorKind::Io(io_err),
-	    msg,
-	}
-    }
-}
-
-impl From<lang::Error> for Error {
-    fn from(lang_err: lang::Error) -> Error {
-	let msg = format!("{}", lang_err);
-	Error {
-	    kind: ErrorKind::Lang(lang_err),
-	    msg,
-	}
-    }
 }
 
 type Result<T> = std::result::Result<T, Error>;
 
 fn run() -> Result<()> {
-    let arg = env::args().nth(1).ok_or(
-	Error {
-	    kind: ErrorKind::BadArgs,
-	    msg: format!("Filename argument is missing"),
-	}
-    )?;
+    let arg = env::args().nth(1).ok_or(Error::BadArgs)?;
     let input = fs::read_to_string(&arg)?;
     let val = lang::eval_str(&input, arg)?;
     println!("> {}", val);

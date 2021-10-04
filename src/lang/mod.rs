@@ -4,55 +4,42 @@
 
 mod parser;
 
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-use crate::nonemptyvec::*;
-use crate::sharedlist::*;
-
+use crate::{
+    nonemptyvec::*,
+    sharedlist::*,
+};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    fmt,
+    sync::atomic::{AtomicUsize, Ordering},
+};
+use thiserror::Error;
 
 static SYM_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Language errors.
-#[derive(Debug, Eq, PartialEq)]
-pub enum ErrorKind {
-    InfiniteType,
-    ParserError,
-    RuntimeError,
-    TypeMismatch,
-    UnknownOperator,
-    VariableNotFound,
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{0}")]
+    InfiniteType(String),
+
+    #[error("Parser error: {0}")]
+    ParserError(#[from] parser::Error),
+
+    #[error("{0}")]
+    RuntimeError(String),
+
+    #[error("{0}")]
+    TypeMismatch(String),
+
+    #[error("{0}")]
+    UnknownOperator(String),
+
+    #[error("{0}")]
+    VariableNotFound(String),
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub struct Error {
-    kind: ErrorKind,
-    msg: String,
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.msg)
-    }
-}
-
-impl std::error::Error for Error {
-    fn description(&self) -> &str {
-        &self.msg
-    }
-}
-
-impl From<parser::Error> for Error {
-    fn from(err: parser::Error) -> Error {
-        Error {
-            kind: ErrorKind::ParserError,
-            msg: format!("parser error: {}", err),
-        }
-    }
-}
-
-type Result<A> = std::result::Result<A, Error>;
+type Result<T> = std::result::Result<T, Error>;
 
 /// Language variables.
 ///
@@ -476,13 +463,8 @@ impl Analyser {
             parser::Type::Ident(ident) => match ident.as_ref() {
                 "Bool" => Ok(Type::Bool),
                 "Int" => Ok(Type::Int),
-                _ => Err(
-                    Error {
-                        kind: ErrorKind::TypeMismatch,
-                        msg: format!("unknown type {}", ident),
-                    }
-                ),
-            },
+                _ => Err(Error::TypeMismatch(format!("Unknown type {}", ident)))
+            }
             parser::Type::Func(ty1, ty2) => Ok(
                 Type::Func(
                     Box::new(Analyser::analyse_type(ty1)?),
@@ -512,24 +494,14 @@ impl Analyser {
             if lhs != rhs {
                 if let Type::Var(v) = lhs {
                     if rhs.vars().contains(&v) {
-                        return Err(
-                            Error {
-                                kind: ErrorKind::InfiniteType,
-                                msg: format!("Type variable {} refers to itself", v),
-                            }
-                        )
+                        return Err(Error::InfiniteType(format!("Type variable {} refers to itself", v)))
                     } else {
                         subst_constraints(&mut constraints, &v, &rhs);
                         subst.push((v, rhs));
                     }
                 } else if let Type::Var(v) = rhs {
                     if lhs.vars().contains(&v) {
-                        return Err(
-                            Error {
-                                kind: ErrorKind::InfiniteType,
-                                msg: format!("Type variable {} refers to itself", v),
-                            }
-                        )
+                        return Err(Error::InfiniteType(format!("Type variable {} refers to itself", v)))
                     } else {
                         subst_constraints(&mut constraints, &v, &lhs);
                         subst.push((v, lhs));
@@ -539,12 +511,7 @@ impl Analyser {
                         constraints.push((*lhs1, *rhs1));
                         constraints.push((*lhs2, *rhs2));
                     } else {
-                        return Err(
-                            Error {
-                                kind: ErrorKind::TypeMismatch,
-                                msg: format!("{:?} is not a function type", rhs),
-                            }
-                        )
+                        return Err(Error::TypeMismatch(format!("{:?} is not a function type", rhs)))
                     }
                 } else if let Type::Tuple(lfst, lsnd, lrest) = lhs {
                     if let Type::Tuple(rfst, rsnd, rrest) = rhs {
@@ -554,20 +521,10 @@ impl Analyser {
                             constraints.push((l, r));
                         }
                     } else {
-                        return Err(
-                            Error {
-                                kind: ErrorKind::TypeMismatch,
-                                msg: format!("{:?} is not a tuple type", rhs),
-                            }
-                        )
+                        return Err(Error::TypeMismatch(format!("{:?} is not a tuple type", rhs)))
                     }
                 } else {
-                    return Err(
-                        Error {
-                            kind: ErrorKind::TypeMismatch,
-                            msg: (format!("Cannot unify the types {:?} and {:?}", lhs, rhs)),
-                        }
-                    )
+                    return Err(Error::TypeMismatch(format!("Cannot unify the types {:?} and {:?}", lhs, rhs)))
                 }
             }
         }
@@ -601,12 +558,18 @@ impl Analyser {
                     Vec::new(),
                 )),
                 parser::Term::Var(n) => {
-                    if let Some(var) = ctx.iter().find_map(|vs| vs.into_iter().find(|v| v.name == *n)) {
+                    if let Some(var) = ctx.iter()
+                        .find_map(|vs|
+                            vs.into_iter().find(|v| v.name == *n)
+                        )
+                    {
                         let ts = anal.sym_table.get(&var).ok_or(
-                            Error {
-                                kind: ErrorKind::VariableNotFound,
-                                msg: format!("Variable '{}' was not found in symbol table", var),
-                            }
+                            Error::VariableNotFound(
+                                format!(
+                                    "Variable '{}' was not found in symbol table",
+                                    var
+                                )
+                            )
                         )?;
 
                         let ts = ts.clone();
@@ -628,10 +591,7 @@ impl Analyser {
                         ))
                     } else {
                         Err(
-                            Error {
-                                kind: ErrorKind::VariableNotFound,
-                                msg: format!("Variable {} is not in scope", n),
-                            }
+                            Error::VariableNotFound(format!("Variable {} is not in scope", n))
                         )
                     }
                 },
@@ -654,10 +614,9 @@ impl Analyser {
                             .get(&v)
                             .map(|ts| ts.ptype.clone())
                             .ok_or(
-                                Error {
-                                    kind: ErrorKind::VariableNotFound,
-                                    msg: format!("Variable {} was not found in symbol table", v),
-                                }
+                                Error::VariableNotFound(
+                                    format!("Variable {} was not found in symbol table", v)
+                                )
                             )?;
                         ttype = Type::Func(Box::new(ptype), Box::new(ttype));
                     }
@@ -894,10 +853,7 @@ impl Analyser {
                         .find(|(o, _)| o == op)
                         .map(|(_, i)| i.clone())
                         .ok_or(
-                            Error {
-                                kind: ErrorKind::UnknownOperator,
-                                msg: format!("Operator {} not found", op),
-                            }
+                        Error::UnknownOperator(format!("Operator {} not found", op))
                         )?;
 
                     let mut cs = ConstrSet::new();
@@ -935,11 +891,8 @@ impl Analyser {
                         .map(|(_, val)| val)
                         .or_else(|| fenv.iter().find(|(var, _)| var == v).map(|(_, val)| val.clone()))
                         .ok_or(
-                        Error {
-                            kind: ErrorKind::RuntimeError,
-                            msg: format!("variable {} not found in environment", v),
-                        }
-                    )
+                        Error::RuntimeError(format!("variable {} not found in environment", v))
+                        )
                 },
                 TermKind::Lam(v, t1) => {
                     let fv = t.free_vars();
@@ -961,10 +914,11 @@ impl Analyser {
                             let mut rib = NonEmptyVec::new((v1, e1));
                             for v in vs {
                                 let a = args_q.pop_front().ok_or(
-                                    Error {
-                                        kind: ErrorKind::RuntimeError,
-                                        msg: format!("insufficient number of arguments given to closure"),
-                                    }
+                                    Error::RuntimeError(
+                                        format!(
+                                            "insufficient number of arguments given to closure"
+                                        )
+                                    )
                                 )?;
                                 let e = walk(a, env, fenv)?;
                                 rib.push((v, e));
@@ -973,13 +927,12 @@ impl Analyser {
                             val = walk(&body, &new_env, &fenv1)?;
                         } else {
                             return Err(
-                                Error {
-                                    kind: ErrorKind::RuntimeError,
-                                    msg: format!(
+                                Error::RuntimeError(
+                                    format!(
                                         "term {} is not a closure but is being applied",
                                         val
-                                    ),
-                                }
+                                    )
+                                )
                             )
                         }
                     };
@@ -995,13 +948,12 @@ impl Analyser {
                         }
                     } else {
                         Err(
-                            Error {
-                                kind: ErrorKind::RuntimeError,
-                                msg: format!(
+                            Error::RuntimeError(
+                                format!(
                                     "`if` guard must be a boolean, but {:?} was given",
                                     guard
-                                ),
-                            }
+                                )
+                            )
                         )
                     }
                 },
@@ -1034,12 +986,7 @@ impl Analyser {
                             Ok(rest.swap_remove(*i - 2))
                         }
                     } else {
-                        Err(
-                            Error {
-                                kind: ErrorKind::RuntimeError,
-                                msg: format!("Cannot index non-tuple {:?}", v)
-                            }
-                        )
+                        Err(Error::RuntimeError(format!("Cannot index non-tuple {:?}", v)))
                     }
                 },
                 TermKind::BinOp(op, t1, t2) => {
@@ -1078,7 +1025,7 @@ impl Analyser {
                                         kind: TermKind::Bool(lhs < rhs),
                                     }
                                 ),
-                                 ">" => Ok(
+                                ">" => Ok(
                                     Term {
                                         kind: TermKind::Bool(lhs > rhs),
                                     }
@@ -1088,32 +1035,33 @@ impl Analyser {
                                         kind: TermKind::Bool(lhs <= rhs),
                                     }
                                 ),
-                                 ">=" => Ok(
+                                ">=" => Ok(
                                     Term {
                                         kind: TermKind::Bool(lhs >= rhs),
                                     }
                                 ),
-                               _ => Err(
-                                    Error {
-                                        kind: ErrorKind::RuntimeError,
-                                        msg: format!("Unknown operator {}", op),
-                                    }
+                                _ => Err(
+                                    Error::RuntimeError(format!("Unknown operator {}", op))
                                 ),
                             }
                         } else {
                             Err(
-                                Error {
-                                    kind: ErrorKind::RuntimeError,
-                                    msg: format!("Right-hand side of operator is not an integer, it's {:?}", e2),
-                                }
+                                Error::RuntimeError(
+                                    format!(
+                                        "Right-hand side of operator is not an integer, it's {:?}",
+                                        e2
+                                    )
+                                )
                             )
                         }
                     } else {
                         Err(
-                            Error {
-                                kind: ErrorKind::RuntimeError,
-                                msg: format!("Left-hand side of operator is not an integer, it's {:?}", e1),
-                            }
+                            Error::RuntimeError(
+                                format!(
+                                    "Left-hand side of operator is not an integer, it's {:?}",
+                                    e1
+                                )
+                            )
                         )
                     }
                 },
