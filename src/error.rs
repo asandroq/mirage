@@ -2,9 +2,6 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Bad arguments")]
-    BadArgs,
-
     #[error("{0}")]
     InfiniteType(String),
 
@@ -16,6 +13,9 @@ pub enum Error {
 
     #[error("{0}")]
     RuntimeError(String),
+
+    #[error("{0}")]
+    RustyLine(#[from] rustyline::error::ReadlineError),
 
     #[error("{0}")]
     TypeMismatch(String),

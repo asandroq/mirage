@@ -3,26 +3,40 @@ mod lang;
 mod nonemptyvec;
 mod sharedlist;
 
-use crate::error::{Error, Result};
-use std::{env, fs};
+use crate::error::Result;
+use rustyline::{Editor, error::ReadlineError};
 
-fn run() -> Result<()> {
-    let arg = env::args().nth(1).ok_or(Error::BadArgs)?;
-    let input = fs::read_to_string(&arg)?;
-    let val = lang::eval_str(&input, arg)?;
-    println!("> {}", val);
-
-    Ok(())
-}
-
-fn main() {
-    std::process::exit(
-        match run() {
-            Ok(_) => 0,
+fn main() -> Result<()> {
+    let mut rl = Editor::<()>::new();
+    if rl.load_history("history.txt").is_err() {
+        println!("No previous history.");
+    }
+    loop {
+        let readline = rl.readline("λ> ");
+        match readline {
+            Ok(line) => {
+                rl.add_history_entry(line.as_str());
+                let res = lang::eval_str(&line, "stdin".to_string());
+                match res {
+                    Ok(val) => println!("{val}"),
+                    Err(err) => println!("Error: {err}"),
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                println!("CTRL-C");
+                break
+            }
+            Err(ReadlineError::Eof) => {
+                println!("CTRL-D");
+                break
+            }
             Err(err) => {
-                eprintln!("Error: {}", err);
-                1
+                println!("Error: {:?}", err);
+                break
             }
         }
-    )
+    }
+    rl.save_history("history.txt")?;
+
+    Ok(())
 }
