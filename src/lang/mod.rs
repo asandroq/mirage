@@ -2,9 +2,10 @@
  * Mirage's built-in programming language.
  */
 
-mod parser;
+pub mod parser;
 
 use crate::{
+    error::{Error, Result},
     nonemptyvec::*,
     sharedlist::*,
 };
@@ -13,33 +14,8 @@ use std::{
     fmt,
     sync::atomic::{AtomicUsize, Ordering},
 };
-use thiserror::Error;
 
 static SYM_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-/// Language errors.
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("{0}")]
-    InfiniteType(String),
-
-    #[error("Parser error: {0}")]
-    ParserError(#[from] parser::Error),
-
-    #[error("{0}")]
-    RuntimeError(String),
-
-    #[error("{0}")]
-    TypeMismatch(String),
-
-    #[error("{0}")]
-    UnknownOperator(String),
-
-    #[error("{0}")]
-    VariableNotFound(String),
-}
-
-type Result<T> = std::result::Result<T, Error>;
 
 /// Language variables.
 ///

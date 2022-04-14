@@ -2,10 +2,8 @@
  * Parser for the Mirage language.
  */
 
-use std::fmt;
-
 use crate::nonemptyvec::*;
-
+use std::fmt;
 
 /// Position of the lexer in the input stream.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -46,7 +44,7 @@ impl std::error::Error for Error {
     }
 }
 
-type Result<A> = std::result::Result<A, Error>;
+type Result<T> = std::result::Result<T, Error>;
 
 /// Predicate for characters that can start names.
 fn can_start_name(c: char) -> bool {
