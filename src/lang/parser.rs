@@ -2,7 +2,7 @@
  * Parser for the Mirage language.
  */
 
-use crate::nonemptyvec::*;
+use crate::collections::nonemptyvec::NonEmptyVec;
 use std::fmt;
 
 /// Position of the lexer in the input stream.
@@ -33,16 +33,22 @@ pub struct Error {
 }
 
 impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}:{}:{}:{}", self.context, self.position.row, self.position.column, self.msg)
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}:{}:{}:{}",
+            self.context, self.position.row, self.position.column, self.msg
+        )
     }
 }
 
-impl std::error::Error for Error {
-    fn description(&self) -> &str {
-        &self.msg
-    }
-}
+impl std::error::Error for Error {}
+
+// impl From<TryFromIntError> for Error {
+//     fn from(err: TryFromIntError) -> Self {
+
+//     }
+// }
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -99,16 +105,20 @@ enum Token {
 impl Token {
     /// Predicate for tokens that can start atomic terms.
     fn starts_atom(&self) -> bool {
-        match self {
-            Token::Bool(_) | Token::Ident(_) | Token::Int(_) |
-            Token::LParen | Token::Pound | Token::Unit => true,
-            _ => false,
-        }
+        matches!(
+            self,
+            Token::Bool(_)
+                | Token::Ident(_)
+                | Token::Int(_)
+                | Token::LParen
+                | Token::Pound
+                | Token::Unit
+        )
     }
 }
 
 impl fmt::Display for Token {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Token::Arrow => write!(f, "'->'"),
             Token::Backslash => write!(f, "'\\'"),
@@ -141,7 +151,7 @@ impl fmt::Display for Token {
 
 /// Scans the input stream and returns tokens.
 #[derive(Debug)]
-struct Lexer<I: Iterator<Item=char>> {
+struct Lexer<I: Iterator<Item = char>> {
     /// Stream of characters with lookahead
     input: std::iter::Peekable<I>,
 
@@ -152,16 +162,13 @@ struct Lexer<I: Iterator<Item=char>> {
     position: Position,
 }
 
-impl<I: Iterator<Item=char>> Lexer<I> {
+impl<I: Iterator<Item = char>> Lexer<I> {
     /// Creates a new Lexer from an iterator over characters.
     fn new(input: I, context: String) -> Lexer<I> {
         Lexer {
             input: input.peekable(),
             context,
-            position: Position {
-                column: 0,
-                row: 1,
-            }
+            position: Position { column: 0, row: 1 },
         }
     }
 
@@ -179,9 +186,9 @@ impl<I: Iterator<Item=char>> Lexer<I> {
         if let Some(c) = oc {
             if c == '\n' {
                 self.position.column = 0;
-                self.position.row = self.position.row + 1;
+                self.position.row += 1;
             } else {
-                self.position.column = self.position.column + 1;
+                self.position.column += 1;
             };
             Some(c)
         } else {
@@ -191,13 +198,9 @@ impl<I: Iterator<Item=char>> Lexer<I> {
 
     /// Consumes all chars until the end of the line
     fn consume_line(&mut self) {
-        loop {
-            if let Some(c) = self.next() {
-                if c == '\n' {
-                    break
-                }
-            } else {
-                break
+        while let Some(c) = self.next() {
+            if c == '\n' {
+                break;
             }
         }
     }
@@ -212,21 +215,19 @@ impl<I: Iterator<Item=char>> Lexer<I> {
             match self.input.peek() {
                 Some(&c) if !is_delimiter(c) => {
                     self.next();
-                    res.push(c)
-                },
+                    res.push(c);
+                }
                 _ => break,
             }
         }
 
-        if res.chars().skip(1).all(|c| is_name_char(c)) {
+        if res.chars().skip(1).all(is_name_char) {
             Ok(res)
         } else {
-            Err(
-                self.err(
-                    ErrorKind::MalformedToken,
-                    format!("cannot parse {} as a name", res),
-                )
-            )
+            Err(self.err(
+                ErrorKind::MalformedToken,
+                format!("cannot parse {} as a name", res),
+            ))
         }
     }
 
@@ -239,18 +240,18 @@ impl<I: Iterator<Item=char>> Lexer<I> {
             match self.input.peek() {
                 Some(&c) if !is_delimiter(c) => {
                     self.next();
-                    s.push(c)
-                },
+                    s.push(c);
+                }
                 _ => break,
             }
         }
 
-        i64::from_str_radix(&s, 10).map_err(
-            |err| self.err(
+        s.parse().map_err(|err| {
+            self.err(
                 ErrorKind::MalformedToken,
                 format!("cannot parse {} as integer: {}", s, err),
             )
-        )
+        })
     }
 
     fn read_operator(&mut self, first: char) -> String {
@@ -261,8 +262,8 @@ impl<I: Iterator<Item=char>> Lexer<I> {
             match self.input.peek() {
                 Some(&c) if is_oper_char(c) => {
                     self.next();
-                    res.push(c)
-                },
+                    res.push(c);
+                }
                 _ => break res,
             }
         }
@@ -274,114 +275,112 @@ impl<I: Iterator<Item=char>> Lexer<I> {
             match self.input.peek() {
                 Some(c) if c.is_whitespace() => {
                     self.next();
-                },
+                }
                 _ => break,
             }
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn next_token(&mut self) -> Result<Token> {
         while let Some(&x) = self.input.peek() {
             match x {
                 '*' => {
                     self.next();
                     let o = self.read_operator('*');
-                    return Ok(Token::Op(o))
-                },
+                    return Ok(Token::Op(o));
+                }
                 '+' => {
                     self.next();
                     let o = self.read_operator('+');
-                    return Ok(Token::Op(o))
-                },
-                '-'=> {
+                    return Ok(Token::Op(o));
+                }
+                '-' => {
                     self.next();
                     match self.input.peek() {
                         Some('-') => {
                             self.consume_line();
-                        },
+                        }
                         Some('>') => {
                             self.next();
-                            return Ok(Token::Arrow)
-                        },
+                            return Ok(Token::Arrow);
+                        }
                         Some(c) if c.is_ascii_digit() => {
                             let i = self.read_integer('-')?;
-                            return Ok(Token::Int(i))
-                        },
+                            return Ok(Token::Int(i));
+                        }
                         _ => {
                             let op = self.read_operator('-');
-                            return Ok(Token::Op(op))
-                        },
+                            return Ok(Token::Op(op));
+                        }
                     }
-                },
+                }
                 '/' => {
                     self.next();
                     let o = self.read_operator('/');
-                    return Ok(Token::Op(o))
-                },
+                    return Ok(Token::Op(o));
+                }
                 '\\' => {
                     self.next();
-                    return Ok(Token::Backslash)
-                },
+                    return Ok(Token::Backslash);
+                }
                 ':' => {
                     self.next();
-                    return Ok(Token::Colon)
-                },
+                    return Ok(Token::Colon);
+                }
                 ',' => {
                     self.next();
-                    return Ok(Token::Comma)
-                },
+                    return Ok(Token::Comma);
+                }
                 '=' => {
                     self.next();
                     match self.input.peek() {
                         Some('>') => {
                             self.next();
-                            return Ok(Token::ThickArrow)
-                        },
-                        Some(c) if c.is_whitespace() => {
-                            return Ok(Token::Equals)
-                        },
+                            return Ok(Token::ThickArrow);
+                        }
+                        Some(c) if c.is_whitespace() => return Ok(Token::Equals),
                         _ => {
                             let op = self.read_operator('=');
-                            return Ok(Token::Op(op))
-                        },
+                            return Ok(Token::Op(op));
+                        }
                     }
-                },
+                }
                 '(' => {
                     self.next();
                     if let Some(')') = self.input.peek() {
                         self.next();
-                        return Ok(Token::Unit)
-                    } else {
-                        return Ok(Token::LParen)
+                        return Ok(Token::Unit);
                     }
-                },
+                    return Ok(Token::LParen);
+                }
                 '#' => {
                     self.next();
-                    return Ok(Token::Pound)
-                },
+                    return Ok(Token::Pound);
+                }
                 ')' => {
                     self.next();
-                    return Ok(Token::RParen)
-                },
+                    return Ok(Token::RParen);
+                }
                 ';' => {
                     self.next();
-                    return Ok(Token::SemiColon)
-                },
+                    return Ok(Token::SemiColon);
+                }
                 '<' => {
                     self.next();
                     let o = self.read_operator('<');
-                    return Ok(Token::Op(o))
-                },
+                    return Ok(Token::Op(o));
+                }
                 '>' => {
                     self.next();
                     let o = self.read_operator('>');
-                    return Ok(Token::Op(o))
-                },
+                    return Ok(Token::Op(o));
+                }
                 c if c.is_ascii_digit() => {
                     self.next();
                     let i = self.read_integer(c)?;
-                    return Ok(Token::Int(i))
-                },
+                    return Ok(Token::Int(i));
+                }
                 c if c.is_whitespace() => self.whitespace(),
                 c if can_start_name(c) => {
                     let tok = {
@@ -401,19 +400,19 @@ impl<I: Iterator<Item=char>> Lexer<I> {
                             _ => Token::Ident(ident),
                         }
                     };
-                    return Ok(tok)
-                },
+                    return Ok(tok);
+                }
                 c if is_oper_char(c) => {
                     self.next();
                     let op = self.read_operator(c);
-                    return Ok(Token::Op(op))
-                },
-                c => return Err(
-                    self.err(
+                    return Ok(Token::Op(op));
+                }
+                c => {
+                    return Err(self.err(
                         ErrorKind::UnrecognisedCharacter,
                         format!("unrecognised character {}", c),
-                    )
-                ),
+                    ))
+                }
             }
         }
 
@@ -430,7 +429,7 @@ pub enum Type {
 }
 
 impl fmt::Display for Type {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Type::Unit => write!(f, "()"),
             Type::Ident(ty) => write!(f, "{}", ty),
@@ -441,7 +440,7 @@ impl fmt::Display for Type {
                     write!(f, ", {}", t)?;
                 }
                 write!(f, ")")
-            },
+            }
         }
     }
 }
@@ -464,9 +463,9 @@ pub enum Term {
 }
 
 impl fmt::Display for Term {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Term::Unit => write!(f, "()") ,
+            Term::Unit => write!(f, "()"),
             Term::Bool(b) => write!(f, "{}", b),
             Term::Int(i) => write!(f, "{}", i),
             Term::Var(v) => write!(f, "{}", v),
@@ -477,30 +476,32 @@ impl fmt::Display for Term {
                     write!(f, " {}", v)?;
                 }
                 write!(f, ". {}", t)
-            },
+            }
             Term::App(t1, ts) => {
                 write!(f, "({}", t1)?;
                 for t in ts {
                     write!(f, " {}", t)?;
                 }
                 write!(f, ")")
-            },
+            }
             Term::If(t1, t2, t3) => write!(f, "if {} then {} else {}", t1, t2, t3),
             Term::Let(v, t1, t2) => write!(f, "let {} = {} in {}", v, t1, t2),
-            Term::Letrec(v, oty, t1, t2) => if let Some(ty) = oty {
-                write!(f, "letrec {} : {} = {} in {}", v, ty, t1, t2)
-            } else {
-                write!(f, "letrec {} = {} in {}", v, t1, t2)
-            },
+            Term::Letrec(v, oty, t1, t2) => {
+                if let Some(ty) = oty {
+                    write!(f, "letrec {} : {} = {} in {}", v, ty, t1, t2)
+                } else {
+                    write!(f, "letrec {} = {} in {}", v, t1, t2)
+                }
+            }
             Term::Tuple(fst, snd, rest) => {
                 write!(f, "({}, {}", fst, snd)?;
                 for t in rest {
                     write!(f, ", {}", t)?;
                 }
                 write!(f, ")")
-            },
+            }
             Term::TupleRef(i, t) => write!(f, "#{}({})", i, t),
-	    Term::BinOp(op, lhs, rhs) => write!(f, "{} {} {}", lhs, op, rhs),
+            Term::BinOp(op, lhs, rhs) => write!(f, "{} {} {}", lhs, op, rhs),
         }
     }
 }
@@ -508,7 +509,6 @@ impl fmt::Display for Term {
 /// Operator associativity.
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum OpAssoc {
-
     /// Left associativity.
     Left,
 
@@ -522,7 +522,6 @@ enum OpAssoc {
 /// Information associated with an operator.
 #[derive(Clone, Debug)]
 struct OpInfo {
-
     /// Operator associativity.
     assoc: OpAssoc,
 
@@ -531,8 +530,7 @@ struct OpInfo {
 }
 
 #[derive(Debug)]
-pub struct Parser<I: Iterator<Item=char>> {
-
+pub struct Parser<I: Iterator<Item = char>> {
     /// Look-ahead token in the input stream.
     la: Option<Token>,
 
@@ -543,7 +541,7 @@ pub struct Parser<I: Iterator<Item=char>> {
     table: Vec<(String, OpInfo)>,
 }
 
-impl<I: Iterator<Item=char>> Parser<I> {
+impl<I: Iterator<Item = char>> Parser<I> {
     pub fn new(input: I, context: String) -> Parser<I> {
         Parser {
             la: None,
@@ -572,31 +570,35 @@ impl<I: Iterator<Item=char>> Parser<I> {
 
     fn next_token(&mut self) -> Result<Token> {
         self.fill()?;
-        self.la.take().ok_or_else(|| self.err(ErrorKind::PrematureEnd, "premature end of input".to_string()))
+        self.la.take().ok_or_else(|| {
+            self.err(
+                ErrorKind::PrematureEnd,
+                "premature end of input".to_string(),
+            )
+        })
     }
 
     fn peek_token(&mut self) -> Result<Token> {
         self.fill()?;
 
-        self.la.as_ref().cloned().ok_or_else(
-            || self.err(
+        self.la.as_ref().cloned().ok_or_else(|| {
+            self.err(
                 ErrorKind::PrematureEnd,
                 "unexpected end of input".to_string(),
             )
-        )
+        })
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn consume_token(&mut self, tok: Token) -> Result<()> {
         let t = self.next_token()?;
         if t == tok {
             Ok(())
         } else {
-            Err(
-                self.err(
-                    ErrorKind::UnexpectedToken,
-                    format!("expected {}, but found {} instead", tok, t),
-                )
-            )
+            Err(self.err(
+                ErrorKind::UnexpectedToken,
+                format!("expected {}, but found {} instead", tok, t),
+            ))
         }
     }
 
@@ -605,12 +607,10 @@ impl<I: Iterator<Item=char>> Parser<I> {
         if let Token::Ident(i) = t {
             Ok(i)
         } else {
-            Err(
-                self.err(
-                    ErrorKind::UnexpectedToken,
-                    format!("identifier expected, but found {} instead", t),
-                )
-            )
+            Err(self.err(
+                ErrorKind::UnexpectedToken,
+                format!("identifier expected, but found {} instead", t),
+            ))
         }
     }
 
@@ -619,27 +619,23 @@ impl<I: Iterator<Item=char>> Parser<I> {
         if let Token::Int(i) = t {
             Ok(i)
         } else {
-            Err(
-                self.err(
-                    ErrorKind::UnexpectedToken,
-                    format!("integer expected, but found {} instead", t),
-                )
-            )
+            Err(self.err(
+                ErrorKind::UnexpectedToken,
+                format!("integer expected, but found {} instead", t),
+            ))
         }
     }
 
     fn consume_operator(&mut self) -> Result<String> {
         let t = self.next_token()?;
-	if let Token::Op(o) = t {
-	    Ok(o)
-	} else {
-	    Err(
-		self.err(
-		    ErrorKind::UnexpectedToken,
-		    format!("operator expected, but found {} instead", t),
-		)
-	    )
-	}
+        if let Token::Op(o) = t {
+            Ok(o)
+        } else {
+            Err(self.err(
+                ErrorKind::UnexpectedToken,
+                format!("operator expected, but found {} instead", t),
+            ))
+        }
     }
 
     // if : IF term THEN term ELSE term
@@ -666,19 +662,21 @@ impl<I: Iterator<Item=char>> Parser<I> {
         }
 
         // check for non-unique variable names
-        let mut vars_ = vars.iter().filter(|v| *v != "_").cloned().collect::<Vec<_>>();
+        let mut vars_ = vars
+            .iter()
+            .filter(|v| *v != "_")
+            .cloned()
+            .collect::<Vec<_>>();
         vars_.sort_unstable();
         for w in vars_.windows(2) {
             if w.first() == w.last() {
-                return Err(
-                    self.err(
-                        ErrorKind::NonUniqueVariable,
-                        format!(
-                            "function variable names must be unique but {} was given more than once",
-                            w.first().unwrap()
-                        ),
-                    )
-                )
+                return Err(self.err(
+                    ErrorKind::NonUniqueVariable,
+                    format!(
+                        "function variable names must be unique but {} was given more than once",
+                        w.first().unwrap()
+                    ),
+                ));
             }
         }
 
@@ -748,40 +746,43 @@ impl<I: Iterator<Item=char>> Parser<I> {
     fn parse_atom_expr(&mut self, min_prec: u8) -> Result<Term> {
         let mut lhs = self.parse_atom_seq()?;
 
-	while let Token::Op(op) = self.peek_token()? {
-            let info = self.table.iter().find(|(o, _)| *o == op).map(|(_, i)| i.clone()).ok_or(
-		self.err(
-		    ErrorKind::UnknownOperator,
-		    format!("Unknown operator {} found", op),
-		)
-	    )?;
+        while let Token::Op(op) = self.peek_token()? {
+            let info = self
+                .table
+                .iter()
+                .find(|(o, _)| *o == op)
+                .map(|(_, i)| i.clone())
+                .ok_or_else(|| {
+                    self.err(
+                        ErrorKind::UnknownOperator,
+                        format!("Unknown operator {} found", op),
+                    )
+                })?;
 
-	    if info.prec < min_prec {
-		break
-	    }
+            if info.prec < min_prec {
+                break;
+            }
 
-	    let next_min_prec = if info.assoc == OpAssoc::Left {
-		info.prec + 1
-	    } else {
-		info.prec
-	    };
+            let next_min_prec = if info.assoc == OpAssoc::Left {
+                info.prec + 1
+            } else {
+                info.prec
+            };
 
-	    self.consume_operator()?;
+            self.consume_operator()?;
 
-	    let rhs = self.parse_atom_expr(next_min_prec)?;
+            let rhs = self.parse_atom_expr(next_min_prec)?;
             if let Term::BinOp(op2, _, _) = &rhs {
                 if op == *op2 && info.assoc == OpAssoc::None {
-                    return Err(
-                        self.err(
-                            ErrorKind::OperatorAssoc,
-                            format!("Operator {} is non-associative", op2),
-                        )
-                    )
+                    return Err(self.err(
+                        ErrorKind::OperatorAssoc,
+                        format!("Operator {} is non-associative", op2),
+                    ));
                 }
             }
 
-	    lhs = Term::BinOp(op, Box::new(lhs), Box::new(rhs));
-	}
+            lhs = Term::BinOp(op, Box::new(lhs), Box::new(rhs));
+        }
 
         Ok(lhs)
     }
@@ -798,12 +799,10 @@ impl<I: Iterator<Item=char>> Parser<I> {
             Token::Let => self.parse_let(),
             Token::Letrec => self.parse_letrec(),
             tok if tok.starts_atom() => self.parse_atom_expr(0),
-            tok => Err(
-                self.err(
-                    ErrorKind::UnexpectedToken,
-                    format!("term expected, but found {} instead", tok),
-                )
-            )
+            tok => Err(self.err(
+                ErrorKind::UnexpectedToken,
+                format!("term expected, but found {} instead", tok),
+            )),
         }
     }
 
@@ -820,23 +819,21 @@ impl<I: Iterator<Item=char>> Parser<I> {
             Token::Bool(b) => {
                 self.next_token()?;
                 Ok(Term::Bool(b))
-            },
+            }
             Token::Ident(ident) => {
                 self.next_token()?;
-                if ident.starts_with("_") {
-                    Err(
-                        self.err(
-                            ErrorKind::UnexpectedToken,
-                            format!(
-                                "variables starting with '_' are not allowed, but {} was found",
-                                ident
-                            ),
-                        )
-                    )
+                if ident.starts_with('_') {
+                    Err(self.err(
+                        ErrorKind::UnexpectedToken,
+                        format!(
+                            "variables starting with '_' are not allowed, but {} was found",
+                            ident
+                        ),
+                    ))
                 } else {
                     Ok(Term::Var(ident))
                 }
-            },
+            }
             Token::LParen => {
                 self.next_token()?;
                 let fst = self.parse_term()?;
@@ -852,38 +849,36 @@ impl<I: Iterator<Item=char>> Parser<I> {
                         match self.peek_token()? {
                             Token::RParen => {
                                 self.consume_token(Token::RParen)?;
-                                return Ok(Term::Tuple(Box::new(fst), Box::new(snd), rest))
-                            },
+                                return Ok(Term::Tuple(Box::new(fst), Box::new(snd), rest));
+                            }
                             Token::Comma => {
                                 self.consume_token(Token::Comma)?;
                                 let t = self.parse_term()?;
                                 rest.push(t);
-                            },
-                            tok => return Err(
-                                self.err(
+                            }
+                            tok => {
+                                return Err(self.err(
                                     ErrorKind::UnexpectedToken,
                                     format!("')' or ',' expected, but found {} instead", tok),
-                                )
-                            ),
+                                ))
+                            }
                         }
                     }
                 } else {
-                    Err(
-                        self.err(
-                            ErrorKind::UnexpectedToken,
-                            format!("')' or ',' expected, but found {} instead", tok),
-                        )
-                    )
+                    Err(self.err(
+                        ErrorKind::UnexpectedToken,
+                        format!("')' or ',' expected, but found {} instead", tok),
+                    ))
                 }
-            },
+            }
             Token::Unit => {
                 self.next_token()?;
                 Ok(Term::Unit)
-            },
+            }
             Token::Int(i) => {
                 self.next_token()?;
                 Ok(Term::Int(i))
-            },
+            }
             Token::Pound => {
                 self.next_token()?;
                 let i = self.consume_integer()?;
@@ -891,22 +886,24 @@ impl<I: Iterator<Item=char>> Parser<I> {
                     self.consume_token(Token::LParen)?;
                     let t = self.parse_term()?;
                     self.consume_token(Token::RParen)?;
+
+                    #[allow(clippy::cast_possible_truncation)]
+                    #[allow(clippy::cast_sign_loss)]
                     Ok(Term::TupleRef(i as usize, Box::new(t)))
                 } else {
-                    Err(
-                        self.err(
-                            ErrorKind::UnexpectedToken,
-                            format!("tuple accessor must be non-negative, but {} found", i),
-                        )
-                    )
+                    Err(self.err(
+                        ErrorKind::UnexpectedToken,
+                        format!("tuple accessor must be non-negative, but {} found", i),
+                    ))
                 }
-            },
-            tok => Err(
-                self.err(
-                    ErrorKind::UnexpectedToken,
-                    format!("identifier, boolean, integer, '#' or '(' expected, but found {} instead", tok),
-                )
-            )
+            }
+            tok => Err(self.err(
+                ErrorKind::UnexpectedToken,
+                format!(
+                    "identifier, boolean, integer, '#' or '(' expected, but found {} instead",
+                    tok
+                ),
+            )),
         }
     }
 
@@ -918,11 +915,11 @@ impl<I: Iterator<Item=char>> Parser<I> {
             Token::Unit => {
                 self.consume_token(Token::Unit)?;
                 self.parse_type_prime(Type::Unit)
-            },
+            }
             Token::Ident(ident) => {
                 self.next_token()?;
                 self.parse_type_prime(Type::Ident(ident))
-            },
+            }
             Token::LParen => {
                 self.consume_token(Token::LParen)?;
                 let fst = self.parse_type()?;
@@ -934,34 +931,29 @@ impl<I: Iterator<Item=char>> Parser<I> {
                         Token::RParen => {
                             self.consume_token(Token::RParen)?;
                             let ty = Type::Tuple(Box::new(fst), Box::new(snd), rest);
-                            return self.parse_type_prime(ty)
-                        },
+                            return self.parse_type_prime(ty);
+                        }
                         Token::Comma => {
                             self.consume_token(Token::Comma)?;
                             let ty = self.parse_type()?;
                             rest.push(ty);
-                        },
+                        }
                         tok => {
-                            let tok = tok.clone();
-                            return Err(
-                                self.err(
-                                    ErrorKind::UnexpectedToken,
-                                    format!("'(', or ',' expected, but found {} instead", tok),
-                                )
-                            )
-                        },
+                            return Err(self.err(
+                                ErrorKind::UnexpectedToken,
+                                format!("'(', or ',' expected, but found {} instead", tok),
+                            ))
+                        }
                     }
                 }
-            },
-            tok => {
-                let tok = tok.clone();
-                Err(
-                    self.err(
-                        ErrorKind::UnexpectedToken,
-                        format!("(), identifier or tuple expected, but found {} instead", tok),
-                    )
-                )
-            },
+            }
+            tok => Err(self.err(
+                ErrorKind::UnexpectedToken,
+                format!(
+                    "(), identifier or tuple expected, but found {} instead",
+                    tok
+                ),
+            )),
         }
     }
 
@@ -979,7 +971,6 @@ impl<I: Iterator<Item=char>> Parser<I> {
 
     // fixdecl : infix|infixl|infixr op (, op...)? num
     fn parse_fixdecl(&mut self) -> Result<()> {
-
         let assoc = match self.next_token()? {
             Token::Infix => OpAssoc::None,
             Token::Infixl => OpAssoc::Left,
@@ -987,38 +978,39 @@ impl<I: Iterator<Item=char>> Parser<I> {
             _ => unreachable!(),
         };
 
+        #[allow(clippy::cast_possible_truncation)]
+        #[allow(clippy::cast_sign_loss)]
         let prec = {
             let i = self.consume_integer()?;
-            if i >= 0 && i <= 9 {
+            if (0..=9).contains(&i) {
                 10 * i as u8
             } else {
-                return Err(
-                    self.err(
-                        ErrorKind::MalformedToken,
-                        format!("operator precedence must be between 0 and 9, but got {} instead", i),
-                    )
-                )
+                return Err(self.err(
+                    ErrorKind::MalformedToken,
+                    format!(
+                        "operator precedence must be between 0 and 9, but got {} instead",
+                        i
+                    ),
+                ));
             }
         };
 
-        let info = OpInfo {assoc, prec};
+        let info = OpInfo { assoc, prec };
 
         loop {
             let op = self.consume_operator()?;
             if self.table.iter().any(|(o, _)| *o == op) {
-                return Err(
-                    self.err(
-                        ErrorKind::OperatorRedeclared,
-                        format!("operator {} was already declared", op),
-                    )
-                )
+                return Err(self.err(
+                    ErrorKind::OperatorRedeclared,
+                    format!("operator {} was already declared", op),
+                ));
             }
             self.table.push((op, info.clone()));
 
             if Token::Comma == self.peek_token()? {
                 self.next_token()?;
             } else {
-                break
+                break;
             }
         }
 

@@ -2,7 +2,7 @@
 name = "mirage"
 version = "0.1.0"
 authors = ["Alex Silva <alex@unendli.ch>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 rustyline = "9.1"

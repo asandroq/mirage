@@ -25,11 +25,11 @@ impl<T> NonEmptyVec<T> {
 
     /// Adds another element to the collection.
     pub fn push(&mut self, elem: T) {
-        self.rest.push(elem)
+        self.rest.push(elem);
     }
 
     /// Iterator over references.
-    pub fn iter(&self) -> Iter<T> {
+    pub fn iter(&self) -> Iter<'_, T> {
         self.into_iter()
     }
 
@@ -39,7 +39,7 @@ impl<T> NonEmptyVec<T> {
     }
 
     /// Access the first and remaining parts separately.
-    pub fn parts(&self) -> (&T, std::slice::Iter<T>) {
+    pub fn parts(&self) -> (&T, std::slice::Iter<'_, T>) {
         (&self.elem, self.rest.iter())
     }
 
@@ -65,7 +65,7 @@ impl<T> NonEmptyVec<T> {
     }
 
     /// Convers this collection into a standard vector.
-    pub fn to_vec(self) -> Vec<T> {
+    pub fn into_vec(self) -> Vec<T> {
         let mut res = vec![*self.elem];
         res.extend(self.rest.into_iter());
 
@@ -78,7 +78,7 @@ impl<T> IntoIterator for NonEmptyVec<T> {
     type IntoIter = std::vec::IntoIter<T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.to_vec().into_iter()
+        self.into_vec().into_iter()
     }
 }
 
@@ -88,7 +88,7 @@ enum IterState {
 }
 
 /// Iterator over the elements of the non-empty collection.
-pub struct Iter<'a, T: 'a> {
+pub struct Iter<'a, T> {
     state: IterState,
     elem: &'a T,
     rest: std::slice::Iter<'a, T>,
@@ -101,8 +101,8 @@ impl<'a, T: 'a> Iterator for Iter<'a, T> {
         match self.state {
             IterState::Elem => {
                 self.state = IterState::Rest;
-                Some(&self.elem)
-            },
+                Some(self.elem)
+            }
             IterState::Rest => self.rest.next(),
         }
     }
@@ -129,7 +129,7 @@ impl<'a, T: 'a> IntoIterator for &'a NonEmptyVec<T> {
 impl<T> Extend<T> for NonEmptyVec<T> {
     fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
         for i in iter {
-            self.push(i)
+            self.push(i);
         }
     }
 }
@@ -215,8 +215,8 @@ mod test {
         let other2 = vec![0, 14, 9, 3, 16];
         coll2.extend(other2.into_iter());
 
-        let coll_ = coll1.zip(coll2);
-        let mut iter = coll_.into_iter();
+        let coll3 = coll1.zip(coll2);
+        let mut iter = coll3.into_iter();
         assert_eq!(iter.next(), Some(('x', 9)));
         assert_eq!(iter.next(), Some(('y', 0)));
         assert_eq!(iter.next(), Some(('z', 14)));

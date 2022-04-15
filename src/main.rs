@@ -1,10 +1,11 @@
+#![allow(clippy::similar_names)]
+
+mod collections;
 mod error;
 mod lang;
-mod nonemptyvec;
-mod sharedlist;
 
 use crate::error::Result;
-use rustyline::{Editor, error::ReadlineError};
+use rustyline::{error::ReadlineError, Editor};
 
 fn main() -> Result<()> {
     let mut rl = Editor::<()>::new();
@@ -24,15 +25,15 @@ fn main() -> Result<()> {
             }
             Err(ReadlineError::Interrupted) => {
                 println!("CTRL-C");
-                break
+                break;
             }
             Err(ReadlineError::Eof) => {
                 println!("CTRL-D");
-                break
+                break;
             }
             Err(err) => {
                 println!("Error: {:?}", err);
-                break
+                break;
             }
         }
     }

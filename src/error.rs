@@ -3,6 +3,9 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("{0}")]
+    FromInt(#[from] std::num::TryFromIntError),
+
+    #[error("{0}")]
     InfiniteType(String),
 
     #[error("IO error: {0}")]
