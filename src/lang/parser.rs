@@ -506,6 +506,17 @@ impl fmt::Display for Term {
     }
 }
 
+#[derive(Debug)]
+pub struct Module {
+    pub decls: Vec<(String, Term)>,
+}
+
+impl Module {
+    pub fn new() -> Self {
+        Self { decls: Vec::new() }
+    }
+}
+
 /// Operator associativity.
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum OpAssoc {
@@ -529,24 +540,39 @@ struct OpInfo {
     prec: u8,
 }
 
+#[allow(clippy::module_name_repetitions)]
 #[derive(Debug)]
-pub struct Parser<I: Iterator<Item = char>> {
+pub struct ParserCtx {
+    /// Operator precedence and associativity table.
+    table: Vec<(String, OpInfo)>,
+}
+
+impl ParserCtx {
+    pub fn new() -> Self {
+        ParserCtx {
+            table: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Parser<'ctx, I: Iterator<Item = char>> {
+    /// Persistent parsing context.
+    ctx: &'ctx mut ParserCtx,
+
     /// Look-ahead token in the input stream.
     la: Option<Token>,
 
     /// Stream of tokens coming from the lexer.
     tokens: Lexer<I>,
-
-    /// Operator precedence and associativity table.
-    table: Vec<(String, OpInfo)>,
 }
 
-impl<I: Iterator<Item = char>> Parser<I> {
-    pub fn new(input: I, context: String) -> Parser<I> {
+impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
+    pub fn new(ctx: &'ctx mut ParserCtx, input: I, input_ctx: String) -> Parser<'ctx, I> {
         Parser {
+            ctx,
             la: None,
-            tokens: Lexer::new(input, context),
-            table: Vec::new(),
+            tokens: Lexer::new(input, input_ctx),
         }
     }
 
@@ -748,6 +774,7 @@ impl<I: Iterator<Item = char>> Parser<I> {
 
         while let Token::Op(op) = self.peek_token()? {
             let info = self
+                .ctx
                 .table
                 .iter()
                 .find(|(o, _)| *o == op)
@@ -999,13 +1026,13 @@ impl<I: Iterator<Item = char>> Parser<I> {
 
         loop {
             let op = self.consume_operator()?;
-            if self.table.iter().any(|(o, _)| *o == op) {
+            if self.ctx.table.iter().any(|(o, _)| *o == op) {
                 return Err(self.err(
                     ErrorKind::OperatorRedeclared,
                     format!("operator {} was already declared", op),
                 ));
             }
-            self.table.push((op, info.clone()));
+            self.ctx.table.push((op, info.clone()));
 
             if Token::Comma == self.peek_token()? {
                 self.next_token()?;
@@ -1027,6 +1054,36 @@ impl<I: Iterator<Item = char>> Parser<I> {
         }
 
         self.parse_term()
+    }
+
+    pub fn parse_module(&mut self) -> Result<Module> {
+        let mut module = Module::new();
+        loop {
+            let tok = self.peek_token()?;
+            match tok {
+                Token::Infix | Token::Infixl | Token::Infixr => {
+                    self.parse_fixdecl()?;
+                    self.consume_token(Token::SemiColon)?;
+                }
+                Token::Let => {
+                    self.consume_token(Token::Let)?;
+                    let ident = self.consume_identifier()?;
+                    self.consume_token(Token::Equals)?;
+                    let term = self.parse_term()?;
+                    self.consume_token(Token::SemiColon)?;
+                    module.decls.push((ident, term));
+                }
+                Token::End => break,
+                _ => {
+                    return Err(self.err(
+                        ErrorKind::UnexpectedToken,
+                        "Couldn't parse a module declaration".to_string(),
+                    ))
+                }
+            }
+        }
+
+        Ok(module)
     }
 }
 
@@ -1101,7 +1158,12 @@ mod test {
     }
 
     fn parse_str(s: &str) -> Result<()> {
-        let mut parser = Parser::new(s.chars(), "tests".to_string());
+        let mut ctx = ParserCtx::new();
+        let mut parser = Parser::new(
+            &mut ctx,
+            s.chars(),
+            "tests".to_string()
+        );
         parser.parse()?;
 
         Ok(())

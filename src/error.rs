@@ -3,6 +3,9 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("{0}")]
+    DuplicateGlobal(String),
+
+    #[error("{0}")]
     FromInt(#[from] std::num::TryFromIntError),
 
     #[error("{0}")]

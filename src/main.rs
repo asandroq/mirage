@@ -4,10 +4,13 @@ mod collections;
 mod error;
 mod lang;
 
-use crate::error::Result;
+use crate::{error::Result, lang::interp::Interpreter};
 use rustyline::{error::ReadlineError, Editor};
 
 fn main() -> Result<()> {
+    let mut interp = Interpreter::new();
+    interp.load_prelude()?;
+
     let mut rl = Editor::<()>::new();
     if rl.load_history("history.txt").is_err() {
         println!("No previous history.");
@@ -17,7 +20,7 @@ fn main() -> Result<()> {
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
-                let res = lang::eval_str(&line, "stdin".to_string());
+                let res = interp.eval_str(&line, "stdin".to_string());
                 match res {
                     Ok(val) => println!("{val}"),
                     Err(err) => println!("Error: {err}"),

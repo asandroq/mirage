@@ -2,6 +2,7 @@
  * Mirage's built-in programming language.
  */
 
+pub mod interp;
 pub mod parser;
 
 use crate::{
@@ -20,7 +21,7 @@ static SYM_COUNTER: AtomicUsize = AtomicUsize::new(0);
 ///
 /// Variables can stand for both values and types.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct Variable {
+pub struct Variable {
     /// Variable name given in the source code.
     name: String,
 
@@ -44,7 +45,7 @@ impl Variable {
 
 impl fmt::Display for Variable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.alias.fmt(f)
+        self.name.fmt(f)
     }
 }
 
@@ -168,10 +169,6 @@ impl TypeScheme {
 /// checking.
 type Ctx = SharedList<NonEmptyVec<Variable>>;
 
-/// An environment used to keep track of values of bound variables
-/// during evaluation.
-type Env = SharedList<NonEmptyVec<(Variable, Term)>>;
-
 type ConstrSet = Vec<(Type, Type)>;
 
 /// Applies a type substitution to all types in a constraint set.
@@ -184,7 +181,7 @@ fn subst_constraints(constrs: &mut ConstrSet, var: &Variable, ttype: &Type) {
 
 /// Kinds of terms of the language.
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum TermKind {
+pub enum TermKind {
     Unit,
     Bool(bool),
     Int(i64),
@@ -204,43 +201,43 @@ impl fmt::Display for TermKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TermKind::Unit => write!(f, "()"),
-            TermKind::Bool(b) => write!(f, "{}", b),
-            TermKind::Int(i) => write!(f, "{}", i),
-            TermKind::Var(var) => write!(f, "{}", var),
+            TermKind::Bool(b) => write!(f, "{b}"),
+            TermKind::Int(i) => write!(f, "{i}"),
+            TermKind::Var(var) => write!(f, "{var}"),
             TermKind::Lam(vs, t) | TermKind::Clo(vs, t, _) => {
                 let (head, tail) = vs.parts();
-                write!(f, "λ{}", head)?;
+                write!(f, "λ{head}")?;
                 for v in tail {
-                    write!(f, " {}", v)?;
+                    write!(f, " {v}")?;
                 }
-                write!(f, ".{}", t)
+                write!(f, ".{t}")
             }
-            TermKind::Fix(v, t) => write!(f, "fix(λ{}. {})", v, t),
+            TermKind::Fix(v, t) => write!(f, "fix(λ{v}. {t})"),
             TermKind::App(fun, args) => {
-                write!(f, "({}", fun)?;
+                write!(f, "({fun}")?;
                 for arg in args {
-                    write!(f, " {}", arg)?;
+                    write!(f, " {arg}")?;
                 }
                 write!(f, ")")
             }
-            TermKind::If(t1, t2, t3) => write!(f, "if {} then {} else {}", t1, t2, t3),
-            TermKind::Let(v, t1, t2) => write!(f, "let {} = {} in {}", v, t1, t2),
+            TermKind::If(t1, t2, t3) => write!(f, "if {t1} then {t2} else {t3}"),
+            TermKind::Let(v, t1, t2) => write!(f, "let {v} = {t1} in {t2}"),
             TermKind::Tuple(fst, snd, rest) => {
-                write!(f, "({}, {}", fst, snd)?;
+                write!(f, "({fst}, {snd}")?;
                 for t in rest {
-                    write!(f, ", {}", t)?;
+                    write!(f, ", {t}")?;
                 }
                 write!(f, ")")
             }
-            TermKind::TupleRef(i, t) => write!(f, "#{}({})", i, t),
-            TermKind::BinOp(op, lhs, rhs) => write!(f, "{} {} {}", lhs, op, rhs),
+            TermKind::TupleRef(i, t) => write!(f, "#{i}({t})"),
+            TermKind::BinOp(op, lhs, rhs) => write!(f, "{lhs} {op} {rhs}"),
         }
     }
 }
 
 /// Language terms.
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct Term {
+pub struct Term {
     kind: TermKind,
 }
 
@@ -311,12 +308,6 @@ impl fmt::Display for Term {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.kind.fmt(f)
     }
-}
-
-fn lookup(var: &Variable, env: &Env) -> Option<Term> {
-    env.iter()
-        .find_map(|rib| rib.into_iter().find(|(v, _)| v == var))
-        .map(|(_, t)| t)
 }
 
 // Operators are just functions, but since we don't have
@@ -844,190 +835,20 @@ impl Analyser {
 
         walk(self, sterm, &SharedList::nil()).map(|(t, ty, _)| (t, ty))
     }
-
-    #[allow(clippy::too_many_lines)]
-    fn eval(term: &Term) -> Result<Term> {
-        fn walk(t: &Term, env: &Env, fenv: &Vec<(Variable, Term)>) -> Result<Term> {
-            match &t.kind {
-                TermKind::Unit | TermKind::Bool(_) | TermKind::Int(_) | TermKind::Clo(_, _, _) => {
-                    Ok(t.clone())
-                }
-                TermKind::Var(v) => env
-                    .iter()
-                    .find_map(|rib| rib.into_iter().find(|(var, _)| var == v))
-                    .map(|(_, val)| val)
-                    .or_else(|| {
-                        fenv.iter()
-                            .find(|(var, _)| var == v)
-                            .map(|(_, val)| val.clone())
-                    })
-                    .ok_or_else(|| {
-                        Error::RuntimeError(format!("variable {} not found in environment", v))
-                    }),
-                TermKind::Lam(v, t1) => {
-                    let fv = t.free_vars();
-                    let frozen_env = fv
-                        .into_iter()
-                        .map(|v| (v.clone(), lookup(&v, env).unwrap()))
-                        .collect();
-                    Ok(Term {
-                        kind: TermKind::Clo(v.clone(), t1.clone(), frozen_env),
-                    })
-                }
-                TermKind::Fix(v, t1) => {
-                    let new_env = env.cons(NonEmptyVec::new((v.clone(), t.clone())));
-                    walk(t1, &new_env, fenv)
-                }
-                TermKind::App(fun, args) => {
-                    let mut val = walk(fun, env, fenv)?;
-                    let mut args_q = args.iter().collect::<VecDeque<_>>();
-                    while !args_q.is_empty() {
-                        if let TermKind::Clo(vars, body, fenv1) = val.kind {
-                            let (v1, vs) = vars.into_parts();
-                            let a1 = args_q.pop_front().unwrap();
-                            let e1 = walk(a1, env, fenv)?;
-                            let mut rib = NonEmptyVec::new((v1, e1));
-                            for v in vs {
-                                let a = args_q.pop_front().ok_or_else(|| {
-                                    Error::RuntimeError(
-                                        "insufficient number of arguments given to closure"
-                                            .to_string(),
-                                    )
-                                })?;
-                                let e = walk(a, env, fenv)?;
-                                rib.push((v, e));
-                            }
-                            let new_env = env.cons(rib);
-                            val = walk(&body, &new_env, &fenv1)?;
-                        } else {
-                            return Err(Error::RuntimeError(format!(
-                                "term {} is not a closure but is being applied",
-                                val
-                            )));
-                        }
-                    }
-                    Ok(val)
-                }
-                TermKind::If(t1, t2, t3) => {
-                    let guard = walk(t1, env, fenv)?;
-                    if let TermKind::Bool(b) = guard.kind {
-                        if b {
-                            walk(t2, env, fenv)
-                        } else {
-                            walk(t3, env, fenv)
-                        }
-                    } else {
-                        Err(Error::RuntimeError(format!(
-                            "`if` guard must be a boolean, but {:?} was given",
-                            guard
-                        )))
-                    }
-                }
-                TermKind::Let(v, t1, t2) => {
-                    let arg = walk(t1, env, fenv)?;
-                    let new_env = env.cons(NonEmptyVec::new((v.clone(), arg)));
-                    walk(t2, &new_env, fenv)
-                }
-                TermKind::Tuple(fst, snd, rest) => {
-                    let fst = walk(fst, env, fenv)?;
-                    let snd = walk(snd, env, fenv)?;
-                    let rest = rest
-                        .iter()
-                        .map(|t| walk(t, env, fenv))
-                        .collect::<Result<Vec<_>>>()?;
-                    Ok(Term {
-                        kind: TermKind::Tuple(Box::new(fst), Box::new(snd), rest),
-                    })
-                }
-                TermKind::TupleRef(i, t) => {
-                    let v = walk(t, env, fenv)?;
-                    if let TermKind::Tuple(fst, snd, mut rest) = v.kind {
-                        if *i == 0 {
-                            Ok(*fst)
-                        } else if *i == 1 {
-                            Ok(*snd)
-                        } else {
-                            Ok(rest.swap_remove(*i - 2))
-                        }
-                    } else {
-                        Err(Error::RuntimeError(format!(
-                            "Cannot index non-tuple {:?}",
-                            v
-                        )))
-                    }
-                }
-                TermKind::BinOp(op, t1, t2) => {
-                    let e1 = walk(t1, env, fenv)?;
-                    if let TermKind::Int(lhs) = e1.kind {
-                        let e2 = walk(t2, env, fenv)?;
-                        if let TermKind::Int(rhs) = e2.kind {
-                            match op.as_str() {
-                                "+" => Ok(Term {
-                                    kind: TermKind::Int(lhs + rhs),
-                                }),
-                                "-" => Ok(Term {
-                                    kind: TermKind::Int(lhs - rhs),
-                                }),
-                                "*" => Ok(Term {
-                                    kind: TermKind::Int(lhs * rhs),
-                                }),
-                                "/" => Ok(Term {
-                                    kind: TermKind::Int(lhs / rhs),
-                                }),
-                                "==" => Ok(Term {
-                                    kind: TermKind::Bool(lhs == rhs),
-                                }),
-                                "<" => Ok(Term {
-                                    kind: TermKind::Bool(lhs < rhs),
-                                }),
-                                ">" => Ok(Term {
-                                    kind: TermKind::Bool(lhs > rhs),
-                                }),
-                                "<=" => Ok(Term {
-                                    kind: TermKind::Bool(lhs <= rhs),
-                                }),
-                                ">=" => Ok(Term {
-                                    kind: TermKind::Bool(lhs >= rhs),
-                                }),
-                                _ => Err(Error::RuntimeError(format!("Unknown operator {}", op))),
-                            }
-                        } else {
-                            Err(Error::RuntimeError(format!(
-                                "Right-hand side of operator is not an integer, it's {:?}",
-                                e2
-                            )))
-                        }
-                    } else {
-                        Err(Error::RuntimeError(format!(
-                            "Left-hand side of operator is not an integer, it's {:?}",
-                            e1
-                        )))
-                    }
-                }
-            }
-        }
-
-        walk(term, &SharedList::nil(), &Vec::new())
-    }
-}
-
-pub fn eval_str(src: &str, context: String) -> Result<String> {
-    let mut parser = parser::Parser::new(src.chars(), context);
-    let sterm = parser.parse()?;
-
-    let mut anal = Analyser::new();
-    let (term, _) = anal.typecheck(&sterm)?;
-
-    let val = Analyser::eval(&term)?;
-    Ok(format!("{}", val))
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use parser::ParserCtx;
 
     fn typecheck_str(src: &str) -> Result<Type> {
-        let mut parser = parser::Parser::new(src.chars(), "tests".to_string());
+        let mut ctx = ParserCtx::new();
+        let mut parser = parser::Parser::new(
+            &mut ctx,
+            src.chars(),
+            "tests".to_string()
+        );
         let sterm = parser.parse()?;
 
         let mut anal = Analyser::new();
@@ -1099,90 +920,6 @@ mod test {
         Ok(())
     }
 
-    fn eval_str(input: &str) -> Result<Term> {
-        let mut parser = parser::Parser::new(input.chars(), "tests".to_string());
-        let sterm = parser.parse()?;
-        let mut anal = Analyser::new();
-        let (term, _) = anal.typecheck(&sterm)?;
-        Analyser::eval(&term)
-    }
-
-    #[test]
-    fn test_eval() -> Result<()> {
-        let i1 = r#"
-           let a = (-5411, (), true, 42)
-           in let f = \x => if #2(x) then #3(x) else #0(x)
-              in f a
-        "#;
-        let t1 = eval_str(i1)?;
-        assert!(matches!(t1.kind, TermKind::Int(i) if i == 42));
-
-        let i2 = r#"
-           let x = (true, true, true)
-           in letrec f : (Bool, Bool, Bool) -> (Bool, Bool, Bool) = \a =>
-                 if #2(a)
-                    then f (true, true, false)
-                    else if #1(a)
-                         then f (true, false, false)
-                         else if #0(a)
-                                 then f (false, false, false)
-                                 else (false, false, false)
-              in f x
-        "#;
-        let t2 = eval_str(i2)?;
-        let tfalse = Box::new(Term {
-            kind: TermKind::Bool(false),
-        });
-        let rfalse = vec![Term {
-            kind: TermKind::Bool(false),
-        }];
-        assert!(matches!(
-            t2.kind,
-            TermKind::Tuple(fst, snd, rest) if fst == tfalse && snd == tfalse && rest == rfalse
-        ));
-
-        let i3 = r#"
-           infix 6 <;
-           infixl 8 -;
-           infixl 9 *;
-           let fact = \n =>
-              letrec go = \t =>
-                 if #0(t) < 1
-                    then #1(t)
-                    else go (#0(t) - 1, #0(t) * #1(t))
-              in go (n, 1)
-           in fact 6
-        "#;
-        let t3 = eval_str(i3)?;
-        assert!(matches!(t3.kind, TermKind::Int(i) if i == 720));
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_poly() -> Result<()> {
-        let input = r#"
-           infixl 8 +;
-           let id = \a => a
-           in let double = \f a => f (f a)
-              in let inc = \n => n + 1
-                 in let not = \b => if b then false else true
-                    in if double not (id false)
-                       then id (double inc 3)
-                       else double inc (id 7)
-        "#;
-
-        assert_eq!(typecheck_str(input)?, Type::Int);
-        assert_eq!(
-            eval_str(input)?,
-            Term {
-                kind: TermKind::Int(9)
-            }
-        );
-
-        Ok(())
-    }
-
     #[test]
     fn test_free_vars() -> Result<()> {
         let input = r#"
@@ -1191,7 +928,12 @@ mod test {
               in ()
         "#;
 
-        let mut parser = parser::Parser::new(input.chars(), "tests".to_string());
+        let mut ctx = ParserCtx::new();
+        let mut parser = parser::Parser::new(
+            &mut ctx,
+            input.chars(),
+            "tests".to_string()
+        );
         let sterm = parser.parse()?;
         let mut anal = Analyser::new();
         let (term, _) = anal.typecheck(&sterm)?;
