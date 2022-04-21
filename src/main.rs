@@ -20,7 +20,7 @@ fn main() -> Result<()> {
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
-                let res = interp.eval_str(&line, "stdin".to_string());
+                let res = interp.eval(&line, "stdin".to_string());
                 match res {
                     Ok(val) => println!("{val}"),
                     Err(err) => println!("Error: {err}"),

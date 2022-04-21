@@ -12,12 +12,14 @@ use std::rc::Rc;
 ///
 /// By hiding this private type we ensure that the list is always
 /// accessed via the reference-counted type.
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum SharedListP<T> {
     Nil,
     Cons(T, SharedList<T>),
 }
 
 /// A linked list with a shareable tail.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SharedList<T>(Rc<SharedListP<T>>);
 
 impl<T> SharedList<T> {

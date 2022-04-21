@@ -69,16 +69,16 @@ impl Type {
             Type::Unit | Type::Bool | Type::Int => HashSet::new(),
             Type::Func(ty1, ty2) => {
                 let mut s1 = ty1.vars();
-                let mut s2 = ty2.vars();
-                s1.extend(s2.drain());
+                let s2 = ty2.vars();
+                s1.extend(s2.into_iter());
                 s1
             }
             Type::Tuple(f, s, r) => {
                 let mut fv = f.vars();
-                let mut sv = s.vars();
-                let mut rv = r.iter().flat_map(Type::vars).collect::<HashSet<_>>();
-                fv.extend(sv.drain());
-                fv.extend(rv.drain());
+                let sv = s.vars();
+                let rv = r.iter().flat_map(Type::vars).collect::<HashSet<_>>();
+                fv.extend(sv.into_iter());
+                fv.extend(rv.into_iter());
                 fv
             }
             Type::Var(v) => {
@@ -167,7 +167,11 @@ impl TypeScheme {
 
 /// A typing context used to keep track of bound variables during type
 /// checking.
-type Ctx = SharedList<NonEmptyVec<Variable>>;
+pub type Ctx = SharedList<NonEmptyVec<Variable>>;
+
+/// An environment used to keep track of values of bound variables
+/// during evaluation.
+pub type Env = SharedList<NonEmptyVec<(Variable, Term)>>;
 
 type ConstrSet = Vec<(Type, Type)>;
 
@@ -187,7 +191,7 @@ pub enum TermKind {
     Int(i64),
     Var(Variable),
     Lam(NonEmptyVec<Variable>, Box<Term>),
-    Clo(NonEmptyVec<Variable>, Box<Term>, Vec<(Variable, Term)>),
+    Clo(NonEmptyVec<Variable>, Box<Term>, Env),
     Fix(Variable, Box<Term>),
     App(Box<Term>, NonEmptyVec<Term>),
     If(Box<Term>, Box<Term>, Box<Term>),
