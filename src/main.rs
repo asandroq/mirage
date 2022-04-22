@@ -6,21 +6,28 @@ mod lang;
 
 use crate::{error::Result, lang::interp::Interpreter};
 use rustyline::{error::ReadlineError, Editor};
+use std::{env, path::{Path, PathBuf}};
 
 fn main() -> Result<()> {
     let mut interp = Interpreter::new();
     interp.load_prelude()?;
 
     let mut rl = Editor::<()>::new();
-    if rl.load_history("history.txt").is_err() {
+    let hist_path = if let Ok(home) = env::var("HOME") {
+        Path::new(&home).join(".mirage_history.txt")
+    } else {
+        PathBuf::from("mirage_history.txt")
+    };
+    if rl.load_history(&hist_path).is_err() {
         println!("No previous history.");
     }
+
     loop {
         let readline = rl.readline("λ> ");
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
-                let res = interp.eval(&line, "stdin".to_string());
+                let res = interp.eval(&line, "REPL".to_string());
                 match res {
                     Ok(val) => println!("{val}"),
                     Err(err) => println!("Error: {err}"),
@@ -40,7 +47,7 @@ fn main() -> Result<()> {
             }
         }
     }
-    rl.save_history("history.txt")?;
 
+    rl.save_history(&hist_path)?;
     Ok(())
 }
