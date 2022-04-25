@@ -21,26 +21,29 @@ static SYM_COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// Language variables.
 ///
 /// Variables can stand for both values and types.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Eq, Hash, PartialEq)]
 pub struct Variable {
     /// Variable name given in the source code.
     name: String,
 
-    /// Variables can be renamed to have unique aliases.
-    alias: String,
+    /// Serial number for creating unique variables.
+    serial: usize,
 }
 
 impl Variable {
     fn new(name: &str) -> Variable {
-        // Generates a new unique symbol using the given name as
-        // prefix. `@` is being used here as it should not be part of
-        // the input syntax for identifiers.
-        let alias = format!("{}@{}", name, SYM_COUNTER.fetch_add(1, Ordering::Relaxed));
+        let serial = SYM_COUNTER.fetch_add(1, Ordering::Relaxed);
 
         Variable {
             name: name.to_string(),
-            alias,
+            serial,
         }
+    }
+}
+
+impl fmt::Debug for Variable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}@{}", self.name, self.serial)
     }
 }
 
