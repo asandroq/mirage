@@ -10,6 +10,7 @@ use crate::{
     error::{Error, Result},
 };
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet, VecDeque},
     fmt,
     sync::atomic::{AtomicUsize, Ordering},
@@ -53,7 +54,7 @@ impl fmt::Display for Variable {
 ///
 /// The variable type is for types that have not been resolved yet.
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum Type {
+pub enum Type {
     Unit,
     Bool,
     Int,
@@ -120,26 +121,54 @@ impl Type {
             .iter()
             .fold(self, |ttype, (v, ty)| ttype.apply_one(v, ty))
     }
+
+    /// Prettify the type for displaying.
+    ///
+    /// Type variables are displayed as lowercase letters.
+    fn prettify(&self) -> Cow<'static, str> {
+        fn walk(ttype: &Type, var_map: &HashMap<Variable, char>) -> Cow<'static, str> {
+            match ttype {
+                Type::Unit => "()".into(),
+                Type::Bool => "Bool".into(),
+                Type::Int => "Int".into(),
+                Type::Func(ty1, ty2) => {
+                    let str1 = walk(ty1.as_ref(), var_map);
+                    let str2 = walk(ty2.as_ref(), var_map);
+                    if matches!(ty1.as_ref(), &Type::Func(..)) {
+                        // function types associate to the right, so
+                        // we need to group the left side if it's a
+                        // function
+                        format!("({str1}) -> {str2}").into()
+                    } else {
+                        format!("{str1} -> {str2}").into()
+                    }
+                }
+                Type::Tuple(fst, snd, rest) => {
+                    let fst = walk(fst.as_ref(), var_map);
+                    let snd = walk(snd.as_ref(), var_map);
+                    let rest = rest.iter().map(|t| walk(t, var_map));
+
+                    let mut res = format!("({fst}, {snd}");
+                    for t in rest {
+                        res.push_str(&format!(", {t}"));
+                    }
+                    res.push(')');
+                    res.into()
+                }
+                Type::Var(v) => {
+                    let c = var_map.get(v).unwrap_or(&'?');
+                    c.to_string().into()
+                }
+            }
+        }
+
+        walk(self, &self.vars().into_iter().zip('a'..='z').collect())
+    }
 }
 
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Type::Unit => write!(f, "()"),
-            Type::Bool => write!(f, "Bool"),
-            Type::Int => write!(f, "Int"),
-            Type::Func(ty1, ty2) => write!(f, "{} -> {}", ty1, ty2),
-            Type::Tuple(fst, snd, rest) => {
-                write!(f, "({}, {}", fst, snd)?;
-                for t in rest {
-                    write!(f, ", {}", t)?;
-                }
-                write!(f, ")")
-            }
-            Type::Var(v) => {
-                write!(f, "{}", v)
-            }
-        }
+        write!(f, "{}", self.prettify())
     }
 }
 

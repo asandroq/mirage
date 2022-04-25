@@ -29,7 +29,7 @@ fn main() -> Result<()> {
                 rl.add_history_entry(line.as_str());
                 let res = interp.eval(&line, "REPL".to_string());
                 match res {
-                    Ok(val) => println!("{val}"),
+                    Ok((val, ttype)) => println!("{val} : {ttype}"),
                     Err(err) => println!("Error: {err}"),
                 }
             }

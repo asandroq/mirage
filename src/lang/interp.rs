@@ -212,7 +212,7 @@ impl Interpreter {
         }
     }
 
-    pub fn eval(&mut self, input: &str, input_ctx: String) -> Result<Term> {
+    pub fn eval(&mut self, input: &str, input_ctx: String) -> Result<(Term, Type)> {
         let mut parser = Parser::new(
             &mut self.parser_ctx,
             input.chars(),
@@ -220,9 +220,9 @@ impl Interpreter {
         );
         let sterm = parser.parse()?;
         let mut anal = Analyser::new();
-        let (term, _) = anal.typecheck(&sterm)?;
+        let (term, ttype) = anal.typecheck(&sterm)?;
         let val = self.eval_term(&term, &SharedList::nil())?;
-        Ok(val)
+        Ok((val, ttype))
     }
 }
 
@@ -255,7 +255,8 @@ mod test {
 
     fn eval_str(input: &str) -> Result<Term> {
         let mut interp = Interpreter::new();
-        interp.eval(input, "tests".to_string())
+        let (val, _) = interp.eval(input, "tests".to_string())?;
+        Ok(val)
     }
 
     #[test]
