@@ -6,7 +6,10 @@ mod lang;
 
 use crate::{error::Result, lang::interp::Interpreter};
 use rustyline::{error::ReadlineError, Editor};
-use std::{env, path::{Path, PathBuf}};
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
 
 fn main() -> Result<()> {
     let mut interp = Interpreter::new();

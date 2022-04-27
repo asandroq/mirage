@@ -13,6 +13,7 @@ use std::{
     borrow::Cow,
     collections::{HashMap, HashSet, VecDeque},
     fmt,
+    rc::Rc,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -199,11 +200,11 @@ impl TypeScheme {
 
 /// A typing context used to keep track of bound variables during type
 /// checking.
-pub type Ctx = SharedList<NonEmptyVec<Variable>>;
+pub type Ctx = SharedList<Variable>;
 
 /// An environment used to keep track of values of bound variables
 /// during evaluation.
-pub type Env = SharedList<NonEmptyVec<(Variable, Term)>>;
+pub type Env = SharedList<(Variable, Rc<Term>)>;
 
 type ConstrSet = Vec<(Type, Type)>;
 
@@ -222,15 +223,15 @@ pub enum TermKind {
     Bool(bool),
     Int(i64),
     Var(Variable),
-    Lam(NonEmptyVec<Variable>, Box<Term>),
-    Clo(NonEmptyVec<Variable>, Box<Term>, Env),
-    Fix(Variable, Box<Term>),
-    App(Box<Term>, NonEmptyVec<Term>),
-    If(Box<Term>, Box<Term>, Box<Term>),
-    Let(Variable, Box<Term>, Box<Term>),
-    Tuple(Box<Term>, Box<Term>, Vec<Term>),
-    TupleRef(usize, Box<Term>),
-    BinOp(String, Box<Term>, Box<Term>),
+    Lam(NonEmptyVec<Variable>, Rc<Term>),
+    Clo(NonEmptyVec<Variable>, Rc<Term>, Env),
+    Fix(Variable, Rc<Term>),
+    App(Rc<Term>, NonEmptyVec<Rc<Term>>),
+    If(Rc<Term>, Rc<Term>, Rc<Term>),
+    Let(Variable, Rc<Term>, Rc<Term>),
+    Tuple(Rc<Term>, Rc<Term>, Vec<Rc<Term>>),
+    TupleRef(usize, Rc<Term>),
+    BinOp(String, Rc<Term>, Rc<Term>),
 }
 
 impl fmt::Display for TermKind {
@@ -537,39 +538,37 @@ impl Analyser {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn typecheck(&mut self, sterm: &parser::Term) -> Result<(Term, Type)> {
+    fn typecheck(&mut self, sterm: &parser::Term) -> Result<(Rc<Term>, Type)> {
         fn walk(
             anal: &mut Analyser,
             s: &parser::Term,
             ctx: &Ctx,
-        ) -> Result<(Term, Type, ConstrSet)> {
+        ) -> Result<(Rc<Term>, Type, ConstrSet)> {
             match s {
                 parser::Term::Unit => Ok((
-                    Term {
+                    Rc::new(Term {
                         kind: TermKind::Unit,
-                    },
+                    }),
                     Type::Unit,
                     Vec::new(),
                 )),
                 parser::Term::Bool(b) => Ok((
-                    Term {
+                    Rc::new(Term {
                         kind: TermKind::Bool(*b),
-                    },
+                    }),
                     Type::Bool,
                     Vec::new(),
                 )),
                 parser::Term::Int(i) => Ok((
-                    Term {
+                    Rc::new(Term {
                         kind: TermKind::Int(*i),
-                    },
+                    }),
                     Type::Int,
                     Vec::new(),
                 )),
                 parser::Term::Var(n) => {
-                    if let Some(var) = ctx
-                        .iter()
-                        .find_map(|vs| vs.into_iter().find(|v| v.name == *n))
-                    {
+                    let var = ctx.iter().find(|v| v.name == *n);
+                    if let Some(var) = var {
                         let ts = anal.sym_table.get(&var).ok_or_else(|| {
                             Error::VariableNotFound(format!(
                                 "Variable '{}' was not found in symbol table",
@@ -588,9 +587,9 @@ impl Analyser {
                             .collect();
 
                         Ok((
-                            Term {
-                                kind: TermKind::Var(var),
-                            },
+                            Rc::new(Term {
+                                kind: TermKind::Var(var.as_ref().clone()),
+                            }),
                             ts.ptype.apply(&subst),
                             Vec::new(),
                         ))
@@ -608,8 +607,7 @@ impl Analyser {
                         let ts = TypeScheme::new(ty);
                         anal.sym_table.insert(var.clone(), ts);
                     }
-
-                    let new_ctx = ctx.cons(rib.clone());
+                    let new_ctx = ctx.extend(rib.clone().into_iter());
                     let (t, mut ttype, cs) = walk(anal, s, &new_ctx)?;
 
                     let mut rvec = rib.clone().into_vec();
@@ -628,9 +626,9 @@ impl Analyser {
                         ttype = Type::Func(Box::new(ptype), Box::new(ttype));
                     }
                     Ok((
-                        Term {
-                            kind: TermKind::Lam(rib, Box::new(t)),
-                        },
+                        Rc::new(Term {
+                            kind: TermKind::Lam(rib, t),
+                        }),
                         ttype,
                         cs,
                     ))
@@ -668,9 +666,9 @@ impl Analyser {
                     anal.apply_subst(&subst);
 
                     Ok((
-                        Term {
-                            kind: TermKind::App(Box::new(t1), ts),
-                        },
+                        Rc::new(Term {
+                            kind: TermKind::App(t1, ts),
+                        }),
                         var.apply(&subst),
                         cs,
                     ))
@@ -691,9 +689,9 @@ impl Analyser {
                     anal.apply_subst(&subst);
 
                     Ok((
-                        Term {
-                            kind: TermKind::If(Box::new(t1), Box::new(t2), Box::new(t3)),
-                        },
+                        Rc::new(Term {
+                            kind: TermKind::If(t1, t2, t3),
+                        }),
                         ty3.apply(&subst),
                         cs,
                     ))
@@ -703,13 +701,11 @@ impl Analyser {
                     let tvars = ty1
                         .vars()
                         .into_iter()
-                        .filter(|v1| {
-                            ctx.iter().all(|vs| {
-                                vs.into_iter().all(|v2| {
-                                    anal.sym_table
-                                        .get(&v2)
-                                        .map_or(true, |ts| !ts.ptype.vars().contains(v1))
-                                })
+                        .filter(|v| {
+                            ctx.iter().all(|v1| {
+                                anal.sym_table
+                                    .get(&v1)
+                                    .map_or(true, |ts| !ts.ptype.vars().contains(v))
                             })
                         })
                         .collect();
@@ -724,7 +720,7 @@ impl Analyser {
                     let (t2, ty2, cs2) = if v.starts_with('_') {
                         walk(anal, s2, ctx)?
                     } else {
-                        let new_ctx = ctx.cons(rib);
+                        let new_ctx = ctx.extend(rib.into_iter());
                         walk(anal, s2, &new_ctx)?
                     };
 
@@ -732,9 +728,9 @@ impl Analyser {
                     cs.extend(cs2.into_iter());
 
                     Ok((
-                        Term {
-                            kind: TermKind::Let(var, Box::new(t1), Box::new(t2)),
-                        },
+                        Rc::new(Term {
+                            kind: TermKind::Let(var, t1, t2),
+                        }),
                         ty2,
                         cs,
                     ))
@@ -748,7 +744,7 @@ impl Analyser {
                     anal.sym_table.insert(var.clone(), ts);
 
                     let rib = NonEmptyVec::new(var.clone());
-                    let new_ctx = ctx.cons(rib);
+                    let new_ctx = ctx.extend(rib.into_iter());
                     let (t1, ty1, cs1) = walk(anal, s1, &new_ctx)?;
                     let (t2, ty2, cs2) = walk(anal, s2, &new_ctx)?;
 
@@ -760,14 +756,14 @@ impl Analyser {
                     let subst = Analyser::unify(cs.clone())?;
                     anal.apply_subst(&subst);
 
-                    let fix = Term {
-                        kind: TermKind::Fix(var.clone(), Box::new(t1)),
-                    };
+                    let fix = Rc::new(Term {
+                        kind: TermKind::Fix(var.clone(), t1),
+                    });
 
                     Ok((
-                        Term {
-                            kind: TermKind::Let(var, Box::new(fix), Box::new(t2)),
-                        },
+                        Rc::new(Term {
+                            kind: TermKind::Let(var, fix, t2),
+                        }),
                         ty2.apply(&subst),
                         cs,
                     ))
@@ -792,9 +788,9 @@ impl Analyser {
                     }
 
                     Ok((
-                        Term {
-                            kind: TermKind::Tuple(Box::new(t1), Box::new(t2), ts),
-                        },
+                        Rc::new(Term {
+                            kind: TermKind::Tuple(t1, t2, ts),
+                        }),
                         Type::Tuple(Box::new(ty1), Box::new(ty2), tys),
                         css,
                     ))
@@ -829,9 +825,9 @@ impl Analyser {
                     anal.apply_subst(&subst);
 
                     Ok((
-                        Term {
-                            kind: TermKind::TupleRef(*i, Box::new(t)),
-                        },
+                        Rc::new(Term {
+                            kind: TermKind::TupleRef(*i, t),
+                        }),
                         ttype.apply(&subst),
                         cs,
                     ))
@@ -859,9 +855,9 @@ impl Analyser {
                     anal.apply_subst(&subst);
 
                     Ok((
-                        Term {
-                            kind: TermKind::BinOp(op.clone(), Box::new(t1), Box::new(t2)),
-                        },
+                        Rc::new(Term {
+                            kind: TermKind::BinOp(op.clone(), t1, t2),
+                        }),
                         info.ttype,
                         cs,
                     ))
@@ -880,11 +876,7 @@ mod test {
 
     fn typecheck_str(src: &str) -> Result<Type> {
         let mut ctx = ParserCtx::new();
-        let mut parser = parser::Parser::new(
-            &mut ctx,
-            src.chars(),
-            "tests".to_string()
-        );
+        let mut parser = parser::Parser::new(&mut ctx, src.chars(), "tests".to_string());
         let sterm = parser.parse()?;
 
         let mut anal = Analyser::new();
@@ -965,11 +957,7 @@ mod test {
         "#;
 
         let mut ctx = ParserCtx::new();
-        let mut parser = parser::Parser::new(
-            &mut ctx,
-            input.chars(),
-            "tests".to_string()
-        );
+        let mut parser = parser::Parser::new(&mut ctx, input.chars(), "tests".to_string());
         let sterm = parser.parse()?;
         let mut anal = Analyser::new();
         let (term, _) = anal.typecheck(&sterm)?;
@@ -977,7 +965,7 @@ mod test {
         let fv = term.free_vars();
         assert!(fv.is_empty());
 
-        if let TermKind::Let(_, t1, t2) = term.kind {
+        if let TermKind::Let(_, t1, t2) = &term.kind {
             let fv1 = t1.free_vars();
             assert!(fv1.is_empty());
 

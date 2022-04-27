@@ -1,18 +1,21 @@
+use super::{Analyser, Term, Type};
 use crate::{
-    collections::{nonemptyvec::NonEmptyVec, sharedlist::SharedList},
+    collections::sharedlist::SharedList,
     error::{Error, Result},
     lang::{
-        Env, TermKind, Variable,
         parser::{Parser, ParserCtx},
+        Env, TermKind, Variable,
     },
 };
-use super::{Analyser, Term, Type};
-use std::collections::{HashMap, VecDeque};
+use std::{
+    collections::{HashMap, VecDeque},
+    rc::Rc,
+};
 
 #[derive(Debug)]
 pub struct Interpreter {
     /// Global namespace.
-    globals: HashMap<String, (Term, Type)>,
+    globals: HashMap<String, (Rc<Term>, Type)>,
 
     /// Persistent parser context.
     parser_ctx: ParserCtx,
@@ -27,11 +30,7 @@ impl Interpreter {
     }
 
     pub fn load_prelude(&mut self) -> Result<()> {
-        let mut parser = Parser::new(
-            &mut self.parser_ctx,
-            PRELUDE.chars(),
-            "prelude".to_string()
-        );
+        let mut parser = Parser::new(&mut self.parser_ctx, PRELUDE.chars(), "prelude".to_string());
         let module = parser.parse_module()?;
         let mut anal = Analyser::new();
         for (name, sterm) in module.decls {
@@ -46,10 +45,10 @@ impl Interpreter {
         Ok(())
     }
 
-    fn eval_term(&self, term: &Term, env: &Env) -> Result<Term> {
+    fn eval_term(&self, term: &Rc<Term>, env: &Env) -> Result<Rc<Term>> {
         match &term.kind {
             TermKind::Unit | TermKind::Bool(..) | TermKind::Int(..) | TermKind::Clo(..) => {
-                Ok(term.clone())
+                Ok(Rc::clone(term))
             }
             TermKind::Var(v) => {
                 let local = lookup(v, env);
@@ -60,11 +59,11 @@ impl Interpreter {
                         .get(&v.name)
                         .map(|(term, _)| term)
                         .ok_or_else(|| Error::RuntimeError(format!("Variable {v} not found")))?;
-                    Ok(global.clone())
+                    Ok(Rc::clone(global))
                 }
             }
             TermKind::Lam(v, body) => {
-                let mut fv = term
+                let fv = term
                     .free_vars()
                     .into_iter()
                     .map(|var| {
@@ -72,42 +71,34 @@ impl Interpreter {
                         Ok((var, val))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let clo_env = if let Some((var, val)) = fv.pop() {
-                    let mut rib = NonEmptyVec::new((var, val));
-                    rib.extend(fv.into_iter());
-                    SharedList::nil().cons(rib)
-                } else {
-                    SharedList::nil()
-                };
-                Ok(Term {
-                    kind: TermKind::Clo(v.clone(), body.clone(), clo_env),
-                })
+                let clo_env = SharedList::nil().extend(fv.into_iter());
+                Ok(Rc::new(Term {
+                    kind: TermKind::Clo(v.clone(), Rc::clone(body), clo_env),
+                }))
             }
             TermKind::Fix(v, body) => {
-                let new_env = env.cons(NonEmptyVec::new((v.clone(), term.clone())));
+                let new_env = env.cons((v.clone(), Rc::clone(term)));
                 self.eval_term(body, &new_env)
             }
             TermKind::App(fun, args) => {
                 let mut val = self.eval_term(fun, env)?;
                 let mut args_q = args.iter().collect::<VecDeque<_>>();
                 while !args_q.is_empty() {
-                    if let TermKind::Clo(vars, body, clo_env) = val.kind {
-                        let (v1, vs) = vars.into_parts();
+                    if let TermKind::Clo(vars, body, clo_env) = &val.kind {
+                        let (v1, vs) = vars.parts();
                         let a1 = args_q.pop_front().unwrap();
                         let e1 = self.eval_term(a1, env)?;
-                        let mut rib = NonEmptyVec::new((v1, e1));
+                        let mut new_env = clo_env.cons((v1.clone(), e1));
                         for v in vs {
                             let a = args_q.pop_front().ok_or_else(|| {
                                 Error::RuntimeError(
-                                    "insufficient number of arguments given to closure"
-                                        .to_string(),
+                                    "insufficient number of arguments given to closure".to_string(),
                                 )
                             })?;
                             let e = self.eval_term(a, env)?;
-                            rib.push((v, e));
+                            new_env = new_env.cons((v.clone(), e));
                         }
-                        let new_env = clo_env.cons(rib);
-                        val = self.eval_term(&body, &new_env)?;
+                        val = self.eval_term(body, &new_env)?;
                     } else {
                         return Err(Error::RuntimeError(format!(
                             "term {val} is not a closure but is being applied"
@@ -133,7 +124,7 @@ impl Interpreter {
             }
             TermKind::Let(v, expr, body) => {
                 let arg = self.eval_term(expr, env)?;
-                let new_env = env.cons(NonEmptyVec::new((v.clone(), arg)));
+                let new_env = env.cons((v.clone(), arg));
                 self.eval_term(body, &new_env)
             }
             TermKind::Tuple(fst, snd, rest) => {
@@ -143,22 +134,25 @@ impl Interpreter {
                     .iter()
                     .map(|t| self.eval_term(t, env))
                     .collect::<Result<Vec<_>>>()?;
-                Ok(Term {
-                    kind: TermKind::Tuple(Box::new(fst), Box::new(snd), rest),
-                })
+                Ok(Rc::new(Term {
+                    kind: TermKind::Tuple(fst, snd, rest),
+                }))
             }
             TermKind::TupleRef(i, t) => {
                 let v = self.eval_term(t, env)?;
-                if let TermKind::Tuple(fst, snd, mut rest) = v.kind {
+                if let TermKind::Tuple(fst, snd, rest) = &v.kind {
                     if *i == 0 {
-                        Ok(*fst)
+                        Ok(Rc::clone(fst))
                     } else if *i == 1 {
-                        Ok(*snd)
+                        Ok(Rc::clone(snd))
                     } else {
-                        Ok(rest.swap_remove(*i - 2))
+                        Ok(Rc::clone(&rest[*i - 2]))
                     }
                 } else {
-                    Err(Error::RuntimeError(format!("Cannot index non-tuple {:?}", v)))
+                    Err(Error::RuntimeError(format!(
+                        "Cannot index non-tuple {:?}",
+                        v
+                    )))
                 }
             }
             TermKind::BinOp(op, t1, t2) => {
@@ -167,33 +161,33 @@ impl Interpreter {
                     let e2 = self.eval_term(t2, env)?;
                     if let TermKind::Int(rhs) = e2.kind {
                         match op.as_str() {
-                            "+" => Ok(Term {
+                            "+" => Ok(Rc::new(Term {
                                 kind: TermKind::Int(lhs + rhs),
-                            }),
-                            "-" => Ok(Term {
+                            })),
+                            "-" => Ok(Rc::new(Term {
                                 kind: TermKind::Int(lhs - rhs),
-                            }),
-                            "*" => Ok(Term {
+                            })),
+                            "*" => Ok(Rc::new(Term {
                                 kind: TermKind::Int(lhs * rhs),
-                            }),
-                            "/" => Ok(Term {
+                            })),
+                            "/" => Ok(Rc::new(Term {
                                 kind: TermKind::Int(lhs / rhs),
-                            }),
-                            "==" => Ok(Term {
+                            })),
+                            "==" => Ok(Rc::new(Term {
                                 kind: TermKind::Bool(lhs == rhs),
-                            }),
-                            "<" => Ok(Term {
+                            })),
+                            "<" => Ok(Rc::new(Term {
                                 kind: TermKind::Bool(lhs < rhs),
-                            }),
-                            ">" => Ok(Term {
+                            })),
+                            ">" => Ok(Rc::new(Term {
                                 kind: TermKind::Bool(lhs > rhs),
-                            }),
-                            "<=" => Ok(Term {
+                            })),
+                            "<=" => Ok(Rc::new(Term {
                                 kind: TermKind::Bool(lhs <= rhs),
-                            }),
-                            ">=" => Ok(Term {
+                            })),
+                            ">=" => Ok(Rc::new(Term {
                                 kind: TermKind::Bool(lhs >= rhs),
-                            }),
+                            })),
                             _ => Err(Error::RuntimeError(format!("Unknown operator {op}"))),
                         }
                     } else {
@@ -213,26 +207,26 @@ impl Interpreter {
     }
 
     pub fn eval(&mut self, input: &str, input_ctx: String) -> Result<(Term, Type)> {
-        let mut parser = Parser::new(
-            &mut self.parser_ctx,
-            input.chars(),
-            input_ctx
-        );
+        let mut parser = Parser::new(&mut self.parser_ctx, input.chars(), input_ctx);
         let sterm = parser.parse()?;
         let mut anal = Analyser::new();
         let (term, ttype) = anal.typecheck(&sterm)?;
         let val = self.eval_term(&term, &SharedList::nil())?;
-        Ok((val, ttype))
+        Ok((val.as_ref().clone(), ttype))
     }
 }
 
-fn lookup(var: &Variable, env: &Env) -> Result<Term> {
+fn lookup(var: &Variable, env: &Env) -> Result<Rc<Term>> {
     env.iter()
-        .find_map(|rib| rib.into_iter().find(|(v, _)| v == var))
-        .map(|(_, t)| t)
-        .ok_or_else(|| {
-            Error::RuntimeError(format!("Variable {var} not found in environment"))
+        .find_map(|rib| {
+            let (v, t) = rib.as_ref();
+            if v == var {
+                Some(Rc::clone(t))
+            } else {
+                None
+            }
         })
+        .ok_or_else(|| Error::RuntimeError(format!("Variable {var} not found in environment")))
 }
 
 const PRELUDE: &str = r#"
@@ -247,11 +241,12 @@ let twice = \f => \x => f (f x);
 
 #[cfg(test)]
 mod test {
+    use super::Interpreter;
     use crate::{
         error::Result,
         lang::{Term, TermKind},
     };
-    use super::Interpreter;
+    use std::rc::Rc;
 
     fn eval_str(input: &str) -> Result<Term> {
         let mut interp = Interpreter::new();
@@ -270,8 +265,7 @@ mod test {
         assert!(matches!(t1.kind, TermKind::Int(i) if i == 42));
 
         let i2 = r#"
-           let x = (true, true, true)
-           in letrec f : (Bool, Bool, Bool) -> (Bool, Bool, Bool) = \a =>
+           letrec f : (Bool, Bool, Bool) -> (Bool, Bool, Bool) = \a =>
                  if #2(a)
                     then f (true, true, false)
                     else if #1(a)
@@ -279,15 +273,15 @@ mod test {
                          else if #0(a)
                                  then f (false, false, false)
                                  else (false, false, false)
-              in f x
+              in f (true, true, true)
         "#;
         let t2 = eval_str(i2)?;
-        let tfalse = Box::new(Term {
+        let tfalse = Rc::new(Term {
             kind: TermKind::Bool(false),
         });
-        let rfalse = vec![Term {
+        let rfalse = vec![Rc::new(Term {
             kind: TermKind::Bool(false),
-        }];
+        })];
         assert!(matches!(
             t2.kind,
             TermKind::Tuple(fst, snd, rest) if fst == tfalse && snd == tfalse && rest == rfalse

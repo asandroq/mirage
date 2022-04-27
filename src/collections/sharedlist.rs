@@ -8,24 +8,17 @@
 use std::iter::FromIterator;
 use std::rc::Rc;
 
-/// Private type for the actual shared list implementation.
-///
-/// By hiding this private type we ensure that the list is always
-/// accessed via the reference-counted type.
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum SharedListP<T> {
-    Nil,
-    Cons(T, SharedList<T>),
-}
-
 /// A linked list with a shareable tail.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SharedList<T>(Rc<SharedListP<T>>);
+#[derive(Debug, Eq, PartialEq)]
+pub enum SharedList<T> {
+    Nil,
+    Cons(Rc<T>, Rc<SharedList<T>>),
+}
 
 impl<T> SharedList<T> {
     /// Constructs a new empty list.
     pub fn nil() -> SharedList<T> {
-        SharedList(Rc::new(SharedListP::<T>::Nil))
+        SharedList::<T>::Nil
     }
 
     /// Constructs a new list with one more element.
@@ -34,37 +27,58 @@ impl<T> SharedList<T> {
     /// accessible. When this new list is dropped, the old one will
     /// remain as long as there are remaining references to it.
     pub fn cons(&self, t: T) -> SharedList<T> {
-        SharedList(Rc::new(SharedListP::<T>::Cons(
-            t,
-            SharedList(self.0.clone()),
-        )))
+        SharedList::<T>::Cons(Rc::new(t), Rc::new(self.clone()))
+    }
+
+    pub fn extend<I: IntoIterator<Item = T>>(&self, iter: I) -> Self {
+        let mut res = self.clone();
+        for t in iter {
+            res = res.cons(t);
+        }
+
+        res
     }
 
     /// Returns an iterator that can produce elements of the list.
-    #[allow(clippy::iter_not_returning_iterator)]
     pub fn iter(&self) -> SharedListIterator<T> {
         SharedListIterator {
-            cursor: SharedList(self.0.clone()),
+            cursor: Rc::new(self.clone()),
         }
     }
 }
 
-pub struct SharedListIterator<T> {
-    cursor: SharedList<T>,
+impl<T> Clone for SharedList<T> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Nil => Self::Nil,
+            Self::Cons(head, tail) => Self::Cons(Rc::clone(head), Rc::clone(tail)),
+        }
+    }
 }
 
-impl<T: Clone> Iterator for SharedListIterator<T> {
-    type Item = T;
+impl<T> Default for SharedList<T> {
+    fn default() -> Self {
+        Self::nil()
+    }
+}
+
+/// Iterator over the list contents.
+pub struct SharedListIterator<T> {
+    cursor: Rc<SharedList<T>>,
+}
+
+impl<T> Iterator for SharedListIterator<T> {
+    type Item = Rc<T>;
 
     // iteration over a shared list starts with the last added
     // element, LIFO-style
-    fn next(&mut self) -> Option<T> {
-        let inner = std::mem::replace(&mut self.cursor, SharedList::<T>::nil());
-        match inner.0.as_ref() {
-            SharedListP::<T>::Nil => None,
-            SharedListP::<T>::Cons(head, tail) => {
-                self.cursor = SharedList(tail.0.clone());
-                Some(head.clone())
+    fn next(&mut self) -> Option<Self::Item> {
+        let cursor = std::mem::take(&mut self.cursor);
+        match cursor.as_ref() {
+            SharedList::<T>::Nil => None,
+            SharedList::<T>::Cons(head, tail) => {
+                self.cursor = Rc::clone(tail);
+                Some(Rc::clone(head))
             }
         }
     }

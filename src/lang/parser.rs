@@ -549,9 +549,7 @@ pub struct ParserCtx {
 
 impl ParserCtx {
     pub fn new() -> Self {
-        ParserCtx {
-            table: Vec::new(),
-        }
+        ParserCtx { table: Vec::new() }
     }
 }
 
@@ -1159,11 +1157,7 @@ mod test {
 
     fn parse_str(s: &str) -> Result<()> {
         let mut ctx = ParserCtx::new();
-        let mut parser = Parser::new(
-            &mut ctx,
-            s.chars(),
-            "tests".to_string()
-        );
+        let mut parser = Parser::new(&mut ctx, s.chars(), "tests".to_string());
         parser.parse()?;
 
         Ok(())
