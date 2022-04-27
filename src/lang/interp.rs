@@ -51,15 +51,20 @@ impl Interpreter {
                 Ok(Rc::clone(term))
             }
             TermKind::Var(v) => {
-                let local = lookup(v, env);
-                if let Ok(local) = local {
-                    Ok(local)
-                } else {
-                    let global = self.globals
+                let fix_or_val = lookup(v, env).or_else(|_| {
+                    self.globals
                         .get(&v.name)
-                        .map(|(term, _)| term)
-                        .ok_or_else(|| Error::RuntimeError(format!("Variable {v} not found")))?;
-                    Ok(Rc::clone(global))
+                        .map(|(term, _)| Rc::clone(term))
+                        .ok_or_else(|| Error::RuntimeError(format!("Variable {v} not found")))
+                })?;
+                if let Term {
+                    kind: TermKind::Fix(..),
+                } = fix_or_val.as_ref()
+                {
+                    // Given the "infinite" nature of fix, we need to keep re-evaluating it
+                    self.eval_term(&fix_or_val, env)
+                } else {
+                    Ok(fix_or_val)
                 }
             }
             TermKind::Lam(v, body) => {
