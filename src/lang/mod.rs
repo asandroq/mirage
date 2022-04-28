@@ -9,6 +9,7 @@ use crate::{
     collections::{nonemptyvec::NonEmptyVec, sharedlist::SharedList},
     error::{Error, Result},
 };
+use parser::Ast;
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet, VecDeque},
@@ -538,35 +539,35 @@ impl Analyser {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn typecheck(&mut self, sterm: &parser::Term) -> Result<(Rc<Term>, Type)> {
+    fn typecheck(&mut self, sterm: &Ast) -> Result<(Rc<Term>, Type)> {
         fn walk(
             anal: &mut Analyser,
-            s: &parser::Term,
+            s: &Ast,
             ctx: &Ctx,
         ) -> Result<(Rc<Term>, Type, ConstrSet)> {
             match s {
-                parser::Term::Unit => Ok((
+                Ast::Unit => Ok((
                     Rc::new(Term {
                         kind: TermKind::Unit,
                     }),
                     Type::Unit,
                     Vec::new(),
                 )),
-                parser::Term::Bool(b) => Ok((
+                Ast::Bool(b) => Ok((
                     Rc::new(Term {
                         kind: TermKind::Bool(*b),
                     }),
                     Type::Bool,
                     Vec::new(),
                 )),
-                parser::Term::Int(i) => Ok((
+                Ast::Int(i) => Ok((
                     Rc::new(Term {
                         kind: TermKind::Int(*i),
                     }),
                     Type::Int,
                     Vec::new(),
                 )),
-                parser::Term::Var(n) => {
+                Ast::Var(n) => {
                     let var = ctx.iter().find(|v| v.name == *n);
                     if let Some(var) = var {
                         let ts = anal.sym_table.get(&var).ok_or_else(|| {
@@ -600,7 +601,7 @@ impl Analyser {
                         )))
                     }
                 }
-                parser::Term::Lam(vs, s) => {
+                Ast::Lam(vs, s) => {
                     let rib = vs.map(|v| Variable::new(v));
                     for var in &rib {
                         let ty = Type::Var(Variable::new("X"));
@@ -633,7 +634,7 @@ impl Analyser {
                         cs,
                     ))
                 }
-                parser::Term::App(s1, ss) => {
+                Ast::App(s1, ss) => {
                     let (t1, ty1, cs1) = walk(anal, s1, ctx)?;
 
                     let (s2, ss) = ss.parts();
@@ -673,7 +674,7 @@ impl Analyser {
                         cs,
                     ))
                 }
-                parser::Term::If(s1, s2, s3) => {
+                Ast::If(s1, s2, s3) => {
                     let (t1, ty1, cs1) = walk(anal, s1, ctx)?;
                     let (t2, ty2, cs2) = walk(anal, s2, ctx)?;
                     let (t3, ty3, cs3) = walk(anal, s3, ctx)?;
@@ -696,7 +697,7 @@ impl Analyser {
                         cs,
                     ))
                 }
-                parser::Term::Let(v, s1, s2) => {
+                Ast::Let(v, s1, s2) => {
                     let (t1, ty1, cs1) = walk(anal, s1, ctx)?;
                     let tvars = ty1
                         .vars()
@@ -735,7 +736,7 @@ impl Analyser {
                         cs,
                     ))
                 }
-                parser::Term::Letrec(v, oty, s1, s2) => {
+                Ast::Letrec(v, oty, s1, s2) => {
                     let var = Variable::new(v);
                     let vty = oty
                         .as_ref()
@@ -768,7 +769,7 @@ impl Analyser {
                         cs,
                     ))
                 }
-                parser::Term::Tuple(fst, snd, rest) => {
+                Ast::Tuple(fst, snd, rest) => {
                     let (t1, ty1, cs1) = walk(anal, fst, ctx)?;
                     let (t2, ty2, cs2) = walk(anal, snd, ctx)?;
                     let ts_tys_css = rest
@@ -795,7 +796,7 @@ impl Analyser {
                         css,
                     ))
                 }
-                parser::Term::TupleRef(i, t) => {
+                Ast::TupleRef(i, t) => {
                     let (t, ty, mut cs) = walk(anal, t, ctx)?;
 
                     // create principal tuple type, the size of the
@@ -832,7 +833,7 @@ impl Analyser {
                         cs,
                     ))
                 }
-                parser::Term::BinOp(op, s1, s2) => {
+                Ast::BinOp(op, s1, s2) => {
                     let (t1, ty1, cs1) = walk(anal, s1, ctx)?;
                     let (t2, ty2, cs2) = walk(anal, s2, ctx)?;
 

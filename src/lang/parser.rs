@@ -44,12 +44,6 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-// impl From<TryFromIntError> for Error {
-//     fn from(err: TryFromIntError) -> Self {
-
-//     }
-// }
-
 type Result<T> = std::result::Result<T, Error>;
 
 /// Predicate for characters that can start names.
@@ -445,31 +439,31 @@ impl fmt::Display for Type {
     }
 }
 
-/// Terms of the source language.
+/// Abstract syntax tree.
 #[derive(Debug, Eq, PartialEq)]
-pub enum Term {
+pub enum Ast {
     Unit,
     Bool(bool),
     Int(i64),
     Var(String),
-    Lam(NonEmptyVec<String>, Box<Term>),
-    App(Box<Term>, NonEmptyVec<Term>),
-    If(Box<Term>, Box<Term>, Box<Term>),
-    Let(String, Box<Term>, Box<Term>),
-    Letrec(String, Option<Type>, Box<Term>, Box<Term>),
-    Tuple(Box<Term>, Box<Term>, Vec<Term>),
-    TupleRef(usize, Box<Term>),
-    BinOp(String, Box<Term>, Box<Term>),
+    Lam(NonEmptyVec<String>, Box<Ast>),
+    App(Box<Ast>, NonEmptyVec<Ast>),
+    If(Box<Ast>, Box<Ast>, Box<Ast>),
+    Let(String, Box<Ast>, Box<Ast>),
+    Letrec(String, Option<Type>, Box<Ast>, Box<Ast>),
+    Tuple(Box<Ast>, Box<Ast>, Vec<Ast>),
+    TupleRef(usize, Box<Ast>),
+    BinOp(String, Box<Ast>, Box<Ast>),
 }
 
-impl fmt::Display for Term {
+impl fmt::Display for Ast {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Term::Unit => write!(f, "()"),
-            Term::Bool(b) => write!(f, "{}", b),
-            Term::Int(i) => write!(f, "{}", i),
-            Term::Var(v) => write!(f, "{}", v),
-            Term::Lam(vs, t) => {
+            Self::Unit => write!(f, "()"),
+            Self::Bool(b) => write!(f, "{}", b),
+            Self::Int(i) => write!(f, "{}", i),
+            Self::Var(v) => write!(f, "{}", v),
+            Self::Lam(vs, t) => {
                 let (v, vs) = vs.parts();
                 write!(f, "λ{}", v)?;
                 for v in vs {
@@ -477,38 +471,38 @@ impl fmt::Display for Term {
                 }
                 write!(f, ". {}", t)
             }
-            Term::App(t1, ts) => {
+            Self::App(t1, ts) => {
                 write!(f, "({}", t1)?;
                 for t in ts {
                     write!(f, " {}", t)?;
                 }
                 write!(f, ")")
             }
-            Term::If(t1, t2, t3) => write!(f, "if {} then {} else {}", t1, t2, t3),
-            Term::Let(v, t1, t2) => write!(f, "let {} = {} in {}", v, t1, t2),
-            Term::Letrec(v, oty, t1, t2) => {
+            Self::If(t1, t2, t3) => write!(f, "if {} then {} else {}", t1, t2, t3),
+            Self::Let(v, t1, t2) => write!(f, "let {} = {} in {}", v, t1, t2),
+            Self::Letrec(v, oty, t1, t2) => {
                 if let Some(ty) = oty {
                     write!(f, "letrec {} : {} = {} in {}", v, ty, t1, t2)
                 } else {
                     write!(f, "letrec {} = {} in {}", v, t1, t2)
                 }
             }
-            Term::Tuple(fst, snd, rest) => {
+            Self::Tuple(fst, snd, rest) => {
                 write!(f, "({}, {}", fst, snd)?;
                 for t in rest {
                     write!(f, ", {}", t)?;
                 }
                 write!(f, ")")
             }
-            Term::TupleRef(i, t) => write!(f, "#{}({})", i, t),
-            Term::BinOp(op, lhs, rhs) => write!(f, "{} {} {}", lhs, op, rhs),
+            Self::TupleRef(i, t) => write!(f, "#{}({})", i, t),
+            Self::BinOp(op, lhs, rhs) => write!(f, "{} {} {}", lhs, op, rhs),
         }
     }
 }
 
 #[derive(Debug)]
 pub struct Module {
-    pub decls: Vec<(String, Term)>,
+    pub decls: Vec<(String, Ast)>,
 }
 
 impl Module {
@@ -663,7 +657,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
     }
 
     // if : IF term THEN term ELSE term
-    fn parse_if(&mut self) -> Result<Term> {
+    fn parse_if(&mut self) -> Result<Ast> {
         self.consume_token(Token::If)?;
         let term1 = self.parse_term()?;
         self.consume_token(Token::Then)?;
@@ -671,11 +665,11 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         self.consume_token(Token::Else)?;
         let term3 = self.parse_term()?;
 
-        Ok(Term::If(Box::new(term1), Box::new(term2), Box::new(term3)))
+        Ok(Ast::If(Box::new(term1), Box::new(term2), Box::new(term3)))
     }
 
     // lambda : '\' ident (... ident)* '=>' term
-    fn parse_lambda(&mut self) -> Result<Term> {
+    fn parse_lambda(&mut self) -> Result<Ast> {
         self.consume_token(Token::Backslash)?;
 
         let var = self.consume_identifier()?;
@@ -707,11 +701,11 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         self.consume_token(Token::ThickArrow)?;
         let term = self.parse_term()?;
 
-        Ok(Term::Lam(vars, Box::new(term)))
+        Ok(Ast::Lam(vars, Box::new(term)))
     }
 
     // let : LET ident = term IN term
-    fn parse_let(&mut self) -> Result<Term> {
+    fn parse_let(&mut self) -> Result<Ast> {
         self.consume_token(Token::Let)?;
         let ident = self.consume_identifier()?;
         self.consume_token(Token::Equals)?;
@@ -719,11 +713,11 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         self.consume_token(Token::In)?;
         let term2 = self.parse_term()?;
 
-        Ok(Term::Let(ident, Box::new(term1), Box::new(term2)))
+        Ok(Ast::Let(ident, Box::new(term1), Box::new(term2)))
     }
 
     // letrec : LETREC ident : type = term IN term
-    fn parse_letrec(&mut self) -> Result<Term> {
+    fn parse_letrec(&mut self) -> Result<Ast> {
         self.consume_token(Token::Letrec)?;
         let var = self.consume_identifier()?;
 
@@ -739,11 +733,11 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         self.consume_token(Token::In)?;
         let term2 = self.parse_term()?;
 
-        Ok(Term::Letrec(var, vty, Box::new(term1), Box::new(term2)))
+        Ok(Ast::Letrec(var, vty, Box::new(term1), Box::new(term2)))
     }
 
     // atom_seq : atom (atom ...)?
-    fn parse_atom_seq(&mut self) -> Result<Term> {
+    fn parse_atom_seq(&mut self) -> Result<Ast> {
         let left = self.parse_atom()?;
         let mut tok = self.peek_token()?;
         if tok.starts_atom() {
@@ -755,7 +749,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 atoms.push(a);
                 tok = self.peek_token()?;
             }
-            Ok(Term::App(Box::new(left), atoms))
+            Ok(Ast::App(Box::new(left), atoms))
         } else {
             Ok(left)
         }
@@ -767,7 +761,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
     // technique, but instead of parsing a single atom for the lhs and
     // rhs we parse sequences of atoms to create the effect that
     // function application has the highest precedence of all
-    fn parse_atom_expr(&mut self, min_prec: u8) -> Result<Term> {
+    fn parse_atom_expr(&mut self, min_prec: u8) -> Result<Ast> {
         let mut lhs = self.parse_atom_seq()?;
 
         while let Token::Op(op) = self.peek_token()? {
@@ -797,7 +791,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             self.consume_operator()?;
 
             let rhs = self.parse_atom_expr(next_min_prec)?;
-            if let Term::BinOp(op2, _, _) = &rhs {
+            if let Ast::BinOp(op2, _, _) = &rhs {
                 if op == *op2 && info.assoc == OpAssoc::None {
                     return Err(self.err(
                         ErrorKind::OperatorAssoc,
@@ -806,7 +800,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 }
             }
 
-            lhs = Term::BinOp(op, Box::new(lhs), Box::new(rhs));
+            lhs = Ast::BinOp(op, Box::new(lhs), Box::new(rhs));
         }
 
         Ok(lhs)
@@ -817,7 +811,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
     //      | let
     //      | letrec
     //      | atom (atom...)?
-    fn parse_term(&mut self) -> Result<Term> {
+    fn parse_term(&mut self) -> Result<Ast> {
         match self.peek_token()? {
             Token::Backslash => self.parse_lambda(),
             Token::If => self.parse_if(),
@@ -839,11 +833,11 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
     //      | '(' term ')'
     //      | '(' term ',' term ',' term ... ')'
     //      | '#' int '(' term ')'
-    fn parse_atom(&mut self) -> Result<Term> {
+    fn parse_atom(&mut self) -> Result<Ast> {
         match self.peek_token()? {
             Token::Bool(b) => {
                 self.next_token()?;
-                Ok(Term::Bool(b))
+                Ok(Ast::Bool(b))
             }
             Token::Ident(ident) => {
                 self.next_token()?;
@@ -856,7 +850,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                         ),
                     ))
                 } else {
-                    Ok(Term::Var(ident))
+                    Ok(Ast::Var(ident))
                 }
             }
             Token::LParen => {
@@ -874,7 +868,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                         match self.peek_token()? {
                             Token::RParen => {
                                 self.consume_token(Token::RParen)?;
-                                return Ok(Term::Tuple(Box::new(fst), Box::new(snd), rest));
+                                return Ok(Ast::Tuple(Box::new(fst), Box::new(snd), rest));
                             }
                             Token::Comma => {
                                 self.consume_token(Token::Comma)?;
@@ -898,11 +892,11 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             }
             Token::Unit => {
                 self.next_token()?;
-                Ok(Term::Unit)
+                Ok(Ast::Unit)
             }
             Token::Int(i) => {
                 self.next_token()?;
-                Ok(Term::Int(i))
+                Ok(Ast::Int(i))
             }
             Token::Pound => {
                 self.next_token()?;
@@ -914,7 +908,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
 
                     #[allow(clippy::cast_possible_truncation)]
                     #[allow(clippy::cast_sign_loss)]
-                    Ok(Term::TupleRef(i as usize, Box::new(t)))
+                    Ok(Ast::TupleRef(i as usize, Box::new(t)))
                 } else {
                     Err(self.err(
                         ErrorKind::UnexpectedToken,
@@ -1043,7 +1037,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
     }
 
     // toplevel : (fixdecl ';' ...)? term
-    pub fn parse(&mut self) -> Result<Term> {
+    pub fn parse(&mut self) -> Result<Ast> {
         let mut tok = self.peek_token()?;
         while tok == Token::Infix || tok == Token::Infixl || tok == Token::Infixr {
             self.parse_fixdecl()?;

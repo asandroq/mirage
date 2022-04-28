@@ -45,6 +45,7 @@ impl Interpreter {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn eval_term(&self, term: &Rc<Term>, env: &Env) -> Result<Rc<Term>> {
         match &term.kind {
             TermKind::Unit | TermKind::Bool(..) | TermKind::Int(..) | TermKind::Clo(..) => {
