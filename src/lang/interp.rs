@@ -1,6 +1,6 @@
-use super::{Analyser, Term, Type};
+use super::{parser::Ast, Analyser, Term, Type};
 use crate::{
-    collections::sharedlist::SharedList,
+    collections::{sharedlist::SharedList, nonemptyvec::NonEmptyVec},
     error::{Error, Result},
     lang::{
         parser::{Parser, ParserCtx},
@@ -8,7 +8,7 @@ use crate::{
     },
 };
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{hash_map::Entry,HashMap, VecDeque},
     rc::Rc,
 };
 
@@ -33,16 +33,28 @@ impl Interpreter {
         let mut parser = Parser::new(&mut self.parser_ctx, PRELUDE.chars(), "prelude".to_string());
         let module = parser.parse_module()?;
         let mut anal = Analyser::new();
-        for (name, sterm) in module.decls {
-            if self.globals.contains_key(&name) {
-                return Err(Error::DuplicateGlobal(name));
-            }
-
-            let (term, ttype) = anal.typecheck(&sterm)?;
-            self.globals.insert(name, (term, ttype));
+        for (vars, ast) in module.decls {
+            self.load_decl(&mut anal, vars, &ast)?;
         }
 
         Ok(())
+    }
+
+    fn load_decl(&mut self, anal: &mut Analyser, vars: NonEmptyVec<String>, ast: &Ast) -> Result<()> {
+        let (var, mut rest) = vars.into_parts();
+        if let Entry::Vacant(e) = self.globals.entry(var.clone()) {
+            let (term, ttype) = if let Some(lvar) = rest.next() {
+                let mut lvars = NonEmptyVec::new(lvar);
+                lvars.extend(rest);
+                anal.typecheck_lambda(&lvars, ast)?
+            } else {
+                anal.typecheck(ast)?
+            };
+            e.insert((term, ttype));
+            Ok(())
+        } else {
+            Err(Error::DuplicateGlobal(var))
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -240,9 +252,9 @@ infix 6 <,==;
 infixl 8 +,-;
 infixl 9 *,/;
 
-let id = \x => x;
+let id x = x;
 
-let twice = \f => \x => f (f x);
+let twice f x = f (f x);
 "#;
 
 #[cfg(test)]

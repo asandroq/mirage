@@ -555,7 +555,7 @@ impl fmt::Display for Ast {
 
 #[derive(Debug)]
 pub(crate) struct Module {
-    pub(crate) decls: Vec<(String, Ast)>,
+    pub(crate) decls: Vec<(NonEmptyVec<String>, Ast)>,
 }
 
 impl Module {
@@ -1086,11 +1086,11 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 }
                 Token::Let => {
                     self.consume_token(Token::Let)?;
-                    let ident = self.consume_identifier()?;
+                    let idents = self.parse_unique_identifiers()?;
                     self.consume_token(Token::Equals)?;
                     let term = self.parse_term()?;
                     self.consume_token(Token::SemiColon)?;
-                    module.decls.push((ident, term));
+                    module.decls.push((idents, term));
                 }
                 Token::End => break,
                 _ => {

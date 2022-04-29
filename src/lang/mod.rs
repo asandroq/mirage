@@ -550,6 +550,11 @@ impl Analyser {
             .map(|(t, ty, _)| (t, ty))
     }
 
+    fn typecheck_lambda(&mut self, vars: &NonEmptyVec<String>, body: &Ast) -> Result<(Rc<Term>, Type)> {
+        let vars = vars.map(Variable::new);
+        self.convert_lambda(vars, body, &SharedList::nil()).map(|(term, ttype, _)| (term, ttype))
+    }
+
     #[allow(clippy::too_many_lines)]
     fn convert_ast(&mut self, ast: &Ast, ctx: &Ctx) -> Result<(Rc<Term>, Type, ConstrSet)> {
         match ast {
