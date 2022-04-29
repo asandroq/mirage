@@ -1,6 +1,4 @@
-/*!
- * Parser for the Mirage language.
- */
+//! * Parser for the Mirage language.
 
 use crate::collections::nonemptyvec::NonEmptyVec;
 use std::fmt;
@@ -441,18 +439,64 @@ impl fmt::Display for Type {
 
 /// Abstract syntax tree.
 #[derive(Debug, Eq, PartialEq)]
-pub enum Ast {
+pub(crate) enum Ast {
+    /// ()
     Unit,
+
+    /// Boolean, `true` or `false`
     Bool(bool),
+
+    /// Signed integers.
     Int(i64),
+
+    /// Variables.
     Var(String),
+
+    /// Lambda abstractions.
+    ///
+    /// It's comprised of variable bindings and a body.
     Lam(NonEmptyVec<String>, Box<Ast>),
+
+    /// Abstraction application.
+    ///
+    /// It's comprised of an operator and operands.
     App(Box<Ast>, NonEmptyVec<Ast>),
+
+    /// Conditional expression.
+    ///
+    /// It's comprised of a test and two branches.
     If(Box<Ast>, Box<Ast>, Box<Ast>),
-    Let(String, Box<Ast>, Box<Ast>),
+
+    /// Let bindings.
+    ///
+    /// It binds a variable to an expression inside its body. If more
+    /// than one identifier is given, then the expression is assumed
+    /// to be the body of a lambda abstraction and the other
+    /// identifiers are its arguments.
+    Let(NonEmptyVec<String>, Box<Ast>, Box<Ast>),
+
+    /// Letrec bindings.
+    ///
+    /// Similar to `Let`, but the variable is also in scope inside the
+    /// expression that gives its own value.
     Letrec(String, Option<Type>, Box<Ast>, Box<Ast>),
+
+    /// Heterogeneous collection of values.
+    ///
+    /// It's comprised of the first and second values, alonside a
+    /// possibly empty rest of values.
     Tuple(Box<Ast>, Box<Ast>, Vec<Ast>),
+
+    /// Selector of a value inside a tuple.
+    ///
+    /// It's comprised of an index and an expression that must
+    /// evaluate to a tuple.
     TupleRef(usize, Box<Ast>),
+
+    /// Binary infix operator.
+    ///
+    /// It's comprised of the operator alongside the left- and
+    /// right-hand sides.
     BinOp(String, Box<Ast>, Box<Ast>),
 }
 
@@ -460,49 +504,58 @@ impl fmt::Display for Ast {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unit => write!(f, "()"),
-            Self::Bool(b) => write!(f, "{}", b),
-            Self::Int(i) => write!(f, "{}", i),
-            Self::Var(v) => write!(f, "{}", v),
-            Self::Lam(vs, t) => {
+            Self::Bool(b) => write!(f, "{b}"),
+            Self::Int(i) => write!(f, "{i}"),
+            Self::Var(v) => write!(f, "{v}"),
+            Self::Lam(vs, body) => {
                 let (v, vs) = vs.parts();
-                write!(f, "λ{}", v)?;
+                write!(f, "λ{v}")?;
                 for v in vs {
-                    write!(f, " {}", v)?;
+                    write!(f, " {v}")?;
                 }
-                write!(f, ". {}", t)
+                write!(f, ". {body}")
             }
-            Self::App(t1, ts) => {
-                write!(f, "({}", t1)?;
-                for t in ts {
-                    write!(f, " {}", t)?;
+            Self::App(rator, rands) => {
+                write!(f, "({rator}")?;
+                for rand in rands {
+                    write!(f, " {rand}")?;
                 }
                 write!(f, ")")
             }
-            Self::If(t1, t2, t3) => write!(f, "if {} then {} else {}", t1, t2, t3),
-            Self::Let(v, t1, t2) => write!(f, "let {} = {} in {}", v, t1, t2),
-            Self::Letrec(v, oty, t1, t2) => {
-                if let Some(ty) = oty {
-                    write!(f, "letrec {} : {} = {} in {}", v, ty, t1, t2)
+            Self::If(test, consequent, alternative) => {
+                write!(f, "if {test} then {consequent} else {alternative}")
+            }
+            Self::Let(vs, expr, body) => {
+                let (v, vs) = vs.parts();
+                write!(f, "let {v}")?;
+                for v in vs {
+                    write!(f, " {v}")?;
+                }
+                write!(f, " = {expr} in {body}")
+            }
+            Self::Letrec(v, ttype, expr, body) => {
+                if let Some(ttype) = ttype {
+                    write!(f, "letrec {v} : {ttype} = {expr} in {body}")
                 } else {
-                    write!(f, "letrec {} = {} in {}", v, t1, t2)
+                    write!(f, "letrec {v} = {expr} in {body}")
                 }
             }
             Self::Tuple(fst, snd, rest) => {
-                write!(f, "({}, {}", fst, snd)?;
+                write!(f, "({fst}, {snd}")?;
                 for t in rest {
-                    write!(f, ", {}", t)?;
+                    write!(f, ", {t}")?;
                 }
                 write!(f, ")")
             }
-            Self::TupleRef(i, t) => write!(f, "#{}({})", i, t),
-            Self::BinOp(op, lhs, rhs) => write!(f, "{} {} {}", lhs, op, rhs),
+            Self::TupleRef(i, tuple) => write!(f, "#{i}({tuple})"),
+            Self::BinOp(op, lhs, rhs) => write!(f, "{lhs} {op} {rhs}"),
         }
     }
 }
 
 #[derive(Debug)]
-pub struct Module {
-    pub decls: Vec<(String, Ast)>,
+pub(crate) struct Module {
+    pub(crate) decls: Vec<(String, Ast)>,
 }
 
 impl Module {
@@ -671,49 +724,23 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
     // lambda : '\' ident (... ident)* '=>' term
     fn parse_lambda(&mut self) -> Result<Ast> {
         self.consume_token(Token::Backslash)?;
-
-        let var = self.consume_identifier()?;
-        let mut vars = NonEmptyVec::new(var);
-        while let Token::Ident(ident) = self.peek_token()? {
-            self.next_token()?;
-            vars.push(ident);
-        }
-
-        // check for non-unique variable names
-        let mut vars_ = vars
-            .iter()
-            .filter(|v| *v != "_")
-            .cloned()
-            .collect::<Vec<_>>();
-        vars_.sort_unstable();
-        for w in vars_.windows(2) {
-            if w.first() == w.last() {
-                return Err(self.err(
-                    ErrorKind::NonUniqueVariable,
-                    format!(
-                        "function variable names must be unique but {} was given more than once",
-                        w.first().unwrap()
-                    ),
-                ));
-            }
-        }
-
+        let vars = self.parse_unique_identifiers()?;
         self.consume_token(Token::ThickArrow)?;
         let term = self.parse_term()?;
 
         Ok(Ast::Lam(vars, Box::new(term)))
     }
 
-    // let : LET ident = term IN term
+    // let : LET ident (... ident)* = term IN term
     fn parse_let(&mut self) -> Result<Ast> {
         self.consume_token(Token::Let)?;
-        let ident = self.consume_identifier()?;
+        let vars = self.parse_unique_identifiers()?;
         self.consume_token(Token::Equals)?;
         let term1 = self.parse_term()?;
         self.consume_token(Token::In)?;
         let term2 = self.parse_term()?;
 
-        Ok(Ast::Let(ident, Box::new(term1), Box::new(term2)))
+        Ok(Ast::Let(vars, Box::new(term1), Box::new(term2)))
     }
 
     // letrec : LETREC ident : type = term IN term
@@ -1037,7 +1064,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
     }
 
     // toplevel : (fixdecl ';' ...)? term
-    pub fn parse(&mut self) -> Result<Ast> {
+    pub(crate) fn parse(&mut self) -> Result<Ast> {
         let mut tok = self.peek_token()?;
         while tok == Token::Infix || tok == Token::Infixl || tok == Token::Infixr {
             self.parse_fixdecl()?;
@@ -1048,7 +1075,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         self.parse_term()
     }
 
-    pub fn parse_module(&mut self) -> Result<Module> {
+    pub(crate) fn parse_module(&mut self) -> Result<Module> {
         let mut module = Module::new();
         loop {
             let tok = self.peek_token()?;
@@ -1076,6 +1103,36 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         }
 
         Ok(module)
+    }
+
+    fn parse_unique_identifiers(&mut self) -> Result<NonEmptyVec<String>> {
+        let var = self.consume_identifier()?;
+        let mut vars = NonEmptyVec::new(var);
+        while let Token::Ident(ident) = self.peek_token()? {
+            self.next_token()?;
+            vars.push(ident);
+        }
+
+        // check that the identifiers are unique
+        let mut vars_ = vars
+            .iter()
+            .filter(|v| *v != "_")
+            .cloned()
+            .collect::<Vec<_>>();
+        vars_.sort_unstable();
+        for w in vars_.windows(2) {
+            if w[0] == w[1] {
+                return Err(self.err(
+                    ErrorKind::NonUniqueVariable,
+                    format!(
+                        "Variable names must be unique but {} was given more than once",
+                        w[0]
+                    ),
+                ));
+            }
+        }
+
+        Ok(vars)
     }
 }
 

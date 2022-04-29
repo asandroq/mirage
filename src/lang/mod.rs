@@ -1,6 +1,4 @@
-/*!
- * Mirage's built-in programming language.
- */
+//! * Mirage's built-in programming language.
 
 pub mod interp;
 pub mod parser;
@@ -18,7 +16,11 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-static SYM_COUNTER: AtomicUsize = AtomicUsize::new(0);
+/// Fountain of serial numbers for symbols.
+///
+/// It starts at 1 because the serial number 0 is reserved for the
+/// wildcard `_`.
+static SYM_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 /// Language variables.
 ///
@@ -33,13 +35,18 @@ pub struct Variable {
 }
 
 impl Variable {
-    fn new(name: &str) -> Variable {
-        let serial = SYM_COUNTER.fetch_add(1, Ordering::Relaxed);
-
-        Variable {
-            name: name.to_string(),
-            serial,
+    fn new<S: ToString + ?Sized>(name: &S) -> Variable {
+        let name = name.to_string();
+        if name == "_" {
+            Variable { name, serial: 0 }
+        } else {
+            let serial = SYM_COUNTER.fetch_add(1, Ordering::Relaxed);
+            Variable { name, serial }
         }
+    }
+
+    fn is_unused(&self) -> bool {
+        self.name.starts_with('_')
     }
 }
 
@@ -538,335 +545,344 @@ impl Analyser {
         Ok(subst)
     }
 
+    fn typecheck(&mut self, ast: &Ast) -> Result<(Rc<Term>, Type)> {
+        self.convert_ast(ast, &SharedList::nil())
+            .map(|(t, ty, _)| (t, ty))
+    }
+
     #[allow(clippy::too_many_lines)]
-    fn typecheck(&mut self, sterm: &Ast) -> Result<(Rc<Term>, Type)> {
-        fn walk(
-            anal: &mut Analyser,
-            s: &Ast,
-            ctx: &Ctx,
-        ) -> Result<(Rc<Term>, Type, ConstrSet)> {
-            match s {
-                Ast::Unit => Ok((
-                    Rc::new(Term {
-                        kind: TermKind::Unit,
-                    }),
-                    Type::Unit,
-                    Vec::new(),
-                )),
-                Ast::Bool(b) => Ok((
-                    Rc::new(Term {
-                        kind: TermKind::Bool(*b),
-                    }),
-                    Type::Bool,
-                    Vec::new(),
-                )),
-                Ast::Int(i) => Ok((
-                    Rc::new(Term {
-                        kind: TermKind::Int(*i),
-                    }),
-                    Type::Int,
-                    Vec::new(),
-                )),
-                Ast::Var(n) => {
-                    let var = ctx.iter().find(|v| v.name == *n);
-                    if let Some(var) = var {
-                        let ts = anal.sym_table.get(&var).ok_or_else(|| {
-                            Error::VariableNotFound(format!(
-                                "Variable '{}' was not found in symbol table",
-                                var
-                            ))
-                        })?;
-
-                        let ts = ts.clone();
-
-                        // create fresh type variables for the free
-                        // variables to allow polymorphism
-                        let subst = ts
-                            .vars
-                            .into_iter()
-                            .map(|v| (v, Type::Var(Variable::new("P"))))
-                            .collect();
-
-                        Ok((
-                            Rc::new(Term {
-                                kind: TermKind::Var(var.as_ref().clone()),
-                            }),
-                            ts.ptype.apply(&subst),
-                            Vec::new(),
+    fn convert_ast(&mut self, ast: &Ast, ctx: &Ctx) -> Result<(Rc<Term>, Type, ConstrSet)> {
+        match ast {
+            Ast::Unit => Ok((
+                Rc::new(Term {
+                    kind: TermKind::Unit,
+                }),
+                Type::Unit,
+                Vec::new(),
+            )),
+            Ast::Bool(b) => Ok((
+                Rc::new(Term {
+                    kind: TermKind::Bool(*b),
+                }),
+                Type::Bool,
+                Vec::new(),
+            )),
+            Ast::Int(i) => Ok((
+                Rc::new(Term {
+                    kind: TermKind::Int(*i),
+                }),
+                Type::Int,
+                Vec::new(),
+            )),
+            Ast::Var(n) => {
+                let var = ctx.iter().find(|v| v.name == *n);
+                if let Some(var) = var {
+                    let ts = self.sym_table.get(&var).ok_or_else(|| {
+                        Error::VariableNotFound(format!(
+                            "Variable '{var}' was not found in symbol table"
                         ))
-                    } else {
-                        Err(Error::VariableNotFound(format!(
-                            "Variable {} is not in scope",
-                            n
-                        )))
-                    }
-                }
-                Ast::Lam(vs, s) => {
-                    let rib = vs.map(|v| Variable::new(v));
-                    for var in &rib {
-                        let ty = Type::Var(Variable::new("X"));
-                        let ts = TypeScheme::new(ty);
-                        anal.sym_table.insert(var.clone(), ts);
-                    }
-                    let new_ctx = ctx.extend(rib.clone().into_iter());
-                    let (t, mut ttype, cs) = walk(anal, s, &new_ctx)?;
+                    })?;
 
-                    let mut rvec = rib.clone().into_vec();
-                    rvec.reverse();
-                    for v in rvec {
-                        let ptype = anal
-                            .sym_table
-                            .get(&v)
-                            .map(|ts| ts.ptype.clone())
-                            .ok_or_else(|| {
-                                Error::VariableNotFound(format!(
-                                    "Variable {} was not found in symbol table",
-                                    v
-                                ))
-                            })?;
-                        ttype = Type::Func(Box::new(ptype), Box::new(ttype));
-                    }
-                    Ok((
-                        Rc::new(Term {
-                            kind: TermKind::Lam(rib, t),
-                        }),
-                        ttype,
-                        cs,
-                    ))
-                }
-                Ast::App(s1, ss) => {
-                    let (t1, ty1, cs1) = walk(anal, s1, ctx)?;
+                    let ts = ts.clone();
 
-                    let (s2, ss) = ss.parts();
-                    let (t2, ty2, cs2) = walk(anal, s2, ctx)?;
-
-                    let mut ts = NonEmptyVec::new(t2);
-
-                    let mut tys = VecDeque::new();
-                    tys.push_front(ty2);
-
-                    let mut cs = ConstrSet::new();
-                    cs.extend(cs1.into_iter());
-                    cs.extend(cs2.into_iter());
-
-                    for s in ss {
-                        let (t, ty, c) = walk(anal, s, ctx)?;
-                        ts.push(t);
-                        tys.push_front(ty);
-                        cs.extend(c.into_iter());
-                    }
-
-                    let var = Type::Var(Variable::new("Y"));
-                    let mut func_ty = var.clone();
-                    for ty in tys {
-                        func_ty = Type::Func(Box::new(ty), Box::new(func_ty));
-                    }
-
-                    cs.push((ty1, func_ty));
-                    let subst = Analyser::unify(cs.clone())?;
-                    anal.apply_subst(&subst);
-
-                    Ok((
-                        Rc::new(Term {
-                            kind: TermKind::App(t1, ts),
-                        }),
-                        var.apply(&subst),
-                        cs,
-                    ))
-                }
-                Ast::If(s1, s2, s3) => {
-                    let (t1, ty1, cs1) = walk(anal, s1, ctx)?;
-                    let (t2, ty2, cs2) = walk(anal, s2, ctx)?;
-                    let (t3, ty3, cs3) = walk(anal, s3, ctx)?;
-
-                    let mut cs = ConstrSet::new();
-                    cs.extend(cs1.into_iter());
-                    cs.extend(cs2.into_iter());
-                    cs.extend(cs3.into_iter());
-                    cs.push((ty1, Type::Bool));
-                    cs.push((ty2, ty3.clone()));
-
-                    let subst = Analyser::unify(cs.clone())?;
-                    anal.apply_subst(&subst);
-
-                    Ok((
-                        Rc::new(Term {
-                            kind: TermKind::If(t1, t2, t3),
-                        }),
-                        ty3.apply(&subst),
-                        cs,
-                    ))
-                }
-                Ast::Let(v, s1, s2) => {
-                    let (t1, ty1, cs1) = walk(anal, s1, ctx)?;
-                    let tvars = ty1
-                        .vars()
+                    // create fresh type variables for the free
+                    // variables to allow polymorphism
+                    let subst = ts
+                        .vars
                         .into_iter()
-                        .filter(|v| {
-                            ctx.iter().all(|v1| {
-                                anal.sym_table
-                                    .get(&v1)
-                                    .map_or(true, |ts| !ts.ptype.vars().contains(v))
-                            })
-                        })
+                        .map(|v| (v, Type::Var(Variable::new("P"))))
                         .collect();
-                    let var = Variable::new(v);
-                    let ts = TypeScheme {
-                        ptype: ty1,
-                        vars: tvars,
-                    };
-                    anal.sym_table.insert(var.clone(), ts);
-
-                    let rib = NonEmptyVec::new(var.clone());
-                    let (t2, ty2, cs2) = if v.starts_with('_') {
-                        walk(anal, s2, ctx)?
-                    } else {
-                        let new_ctx = ctx.extend(rib.into_iter());
-                        walk(anal, s2, &new_ctx)?
-                    };
-
-                    let mut cs = cs1;
-                    cs.extend(cs2.into_iter());
 
                     Ok((
                         Rc::new(Term {
-                            kind: TermKind::Let(var, t1, t2),
+                            kind: TermKind::Var(var.as_ref().clone()),
                         }),
-                        ty2,
-                        cs,
+                        ts.ptype.apply(&subst),
+                        Vec::new(),
                     ))
-                }
-                Ast::Letrec(v, oty, s1, s2) => {
-                    let var = Variable::new(v);
-                    let vty = oty
-                        .as_ref()
-                        .map_or(Ok(Type::Var(Variable::new("F"))), Analyser::analyse_type)?;
-                    let ts = TypeScheme::new(vty.clone());
-                    anal.sym_table.insert(var.clone(), ts);
-
-                    let rib = NonEmptyVec::new(var.clone());
-                    let new_ctx = ctx.extend(rib.into_iter());
-                    let (t1, ty1, cs1) = walk(anal, s1, &new_ctx)?;
-                    let (t2, ty2, cs2) = walk(anal, s2, &new_ctx)?;
-
-                    let mut cs = ConstrSet::new();
-                    cs.extend(cs1.into_iter());
-                    cs.extend(cs2.into_iter());
-                    cs.push((vty, ty1));
-
-                    let subst = Analyser::unify(cs.clone())?;
-                    anal.apply_subst(&subst);
-
-                    let fix = Rc::new(Term {
-                        kind: TermKind::Fix(var.clone(), t1),
-                    });
-
-                    Ok((
-                        Rc::new(Term {
-                            kind: TermKind::Let(var, fix, t2),
-                        }),
-                        ty2.apply(&subst),
-                        cs,
-                    ))
-                }
-                Ast::Tuple(fst, snd, rest) => {
-                    let (t1, ty1, cs1) = walk(anal, fst, ctx)?;
-                    let (t2, ty2, cs2) = walk(anal, snd, ctx)?;
-                    let ts_tys_css = rest
-                        .iter()
-                        .map(|t| walk(anal, t, ctx))
-                        .collect::<Result<Vec<_>>>()?;
-
-                    let mut ts = Vec::new();
-                    let mut tys = Vec::new();
-                    let mut css = Vec::new();
-                    css.extend(cs1.into_iter());
-                    css.extend(cs2.into_iter());
-                    for (t, ty, cs) in ts_tys_css {
-                        ts.push(t);
-                        tys.push(ty);
-                        css.extend(cs.into_iter());
-                    }
-
-                    Ok((
-                        Rc::new(Term {
-                            kind: TermKind::Tuple(t1, t2, ts),
-                        }),
-                        Type::Tuple(Box::new(ty1), Box::new(ty2), tys),
-                        css,
-                    ))
-                }
-                Ast::TupleRef(i, t) => {
-                    let (t, ty, mut cs) = walk(anal, t, ctx)?;
-
-                    // create principal tuple type, the size of the
-                    // rest vector is just the smallest size that will
-                    // typecheck
-                    let fst = Type::Var(Variable::new("T"));
-                    let snd = Type::Var(Variable::new("T"));
-                    let len = (i + 1).saturating_sub(2);
-                    let mut rest = Vec::with_capacity(len);
-                    for _ in 0..len {
-                        rest.push(Type::Var(Variable::new("T")));
-                    }
-
-                    let ttype = if *i == 0 {
-                        fst.clone()
-                    } else if *i == 1 {
-                        snd.clone()
-                    } else {
-                        // unwrap is safe because i > 1, so rest is not empty
-                        rest.last().map(Type::clone).unwrap()
-                    };
-                    let tuple_type = Type::Tuple(Box::new(fst), Box::new(snd), rest);
-
-                    cs.push((ty, tuple_type));
-
-                    let subst = Analyser::unify(cs.clone())?;
-                    anal.apply_subst(&subst);
-
-                    Ok((
-                        Rc::new(Term {
-                            kind: TermKind::TupleRef(*i, t),
-                        }),
-                        ttype.apply(&subst),
-                        cs,
-                    ))
-                }
-                Ast::BinOp(op, s1, s2) => {
-                    let (t1, ty1, cs1) = walk(anal, s1, ctx)?;
-                    let (t2, ty2, cs2) = walk(anal, s2, ctx)?;
-
-                    let info = anal
-                        .oper_table
-                        .iter()
-                        .find(|(o, _)| o == op)
-                        .map(|(_, i)| i.clone())
-                        .ok_or_else(|| {
-                            Error::UnknownOperator(format!("Operator {} not found", op))
-                        })?;
-
-                    let mut cs = ConstrSet::new();
-                    cs.extend(cs1.into_iter());
-                    cs.extend(cs2.into_iter());
-                    cs.push((ty1, info.ltype));
-                    cs.push((ty2, info.rtype));
-
-                    let subst = Analyser::unify(cs.clone())?;
-                    anal.apply_subst(&subst);
-
-                    Ok((
-                        Rc::new(Term {
-                            kind: TermKind::BinOp(op.clone(), t1, t2),
-                        }),
-                        info.ttype,
-                        cs,
-                    ))
+                } else {
+                    Err(Error::VariableNotFound(format!(
+                        "Variable {n} is not in scope"
+                    )))
                 }
             }
-        }
+            Ast::Lam(vars, body) => {
+                let vars = vars.map(Variable::new);
+                self.convert_lambda(vars, body, ctx)
+            }
+            Ast::App(s1, ss) => {
+                let (t1, ty1, cs1) = self.convert_ast(s1, ctx)?;
 
-        walk(self, sterm, &SharedList::nil()).map(|(t, ty, _)| (t, ty))
+                let (s2, ss) = ss.parts();
+                let (t2, ty2, cs2) = self.convert_ast(s2, ctx)?;
+
+                let mut ts = NonEmptyVec::new(t2);
+
+                let mut tys = VecDeque::new();
+                tys.push_front(ty2);
+
+                let mut cs = ConstrSet::new();
+                cs.extend(cs1.into_iter());
+                cs.extend(cs2.into_iter());
+
+                for s in ss {
+                    let (t, ty, c) = self.convert_ast(s, ctx)?;
+                    ts.push(t);
+                    tys.push_front(ty);
+                    cs.extend(c.into_iter());
+                }
+
+                let var = Type::Var(Variable::new("Y"));
+                let mut func_ty = var.clone();
+                for ty in tys {
+                    func_ty = Type::Func(Box::new(ty), Box::new(func_ty));
+                }
+
+                cs.push((ty1, func_ty));
+                let subst = Analyser::unify(cs.clone())?;
+                self.apply_subst(&subst);
+
+                Ok((
+                    Rc::new(Term {
+                        kind: TermKind::App(t1, ts),
+                    }),
+                    var.apply(&subst),
+                    cs,
+                ))
+            }
+            Ast::If(s1, s2, s3) => {
+                let (t1, ty1, cs1) = self.convert_ast(s1, ctx)?;
+                let (t2, ty2, cs2) = self.convert_ast(s2, ctx)?;
+                let (t3, ty3, cs3) = self.convert_ast(s3, ctx)?;
+
+                let mut cs = ConstrSet::new();
+                cs.extend(cs1.into_iter());
+                cs.extend(cs2.into_iter());
+                cs.extend(cs3.into_iter());
+                cs.push((ty1, Type::Bool));
+                cs.push((ty2, ty3.clone()));
+
+                let subst = Analyser::unify(cs.clone())?;
+                self.apply_subst(&subst);
+
+                Ok((
+                    Rc::new(Term {
+                        kind: TermKind::If(t1, t2, t3),
+                    }),
+                    ty3.apply(&subst),
+                    cs,
+                ))
+            }
+            Ast::Let(idents, expr, body) => {
+                let vars = idents.map(Variable::new);
+                let (var, mut rest) = vars.into_parts();
+
+                // handle the case where the `let` expression is a lambda abstraction
+                let (expr, ty1, cs1) = if let Some(lvar) = rest.next() {
+                    let mut lvars = NonEmptyVec::new(lvar);
+                    lvars.extend(rest);
+                    self.convert_lambda(lvars, expr, ctx)?
+                } else {
+                    self.convert_ast(expr, ctx)?
+                };
+
+                let tvars = ty1
+                    .vars()
+                    .into_iter()
+                    .filter(|v| {
+                        ctx.iter().all(|v1| {
+                            self.sym_table
+                                .get(&v1)
+                                .map_or(true, |ts| !ts.ptype.vars().contains(v))
+                        })
+                    })
+                    .collect();
+                let ts = TypeScheme {
+                    ptype: ty1,
+                    vars: tvars,
+                };
+                self.sym_table.insert(var.clone(), ts);
+
+                let rib = NonEmptyVec::new(var.clone());
+                let (body, ty2, cs2) = if var.is_unused() {
+                    self.convert_ast(body, ctx)?
+                } else {
+                    let new_ctx = ctx.extend(rib.into_iter());
+                    self.convert_ast(body, &new_ctx)?
+                };
+
+                let mut cs = cs1;
+                cs.extend(cs2.into_iter());
+
+                Ok((
+                    Rc::new(Term {
+                        kind: TermKind::Let(var, expr, body),
+                    }),
+                    ty2,
+                    cs,
+                ))
+            }
+            Ast::Letrec(v, oty, s1, s2) => {
+                let var = Variable::new(v);
+                let vty = oty
+                    .as_ref()
+                    .map_or(Ok(Type::Var(Variable::new("F"))), Analyser::analyse_type)?;
+                let ts = TypeScheme::new(vty.clone());
+                self.sym_table.insert(var.clone(), ts);
+
+                let rib = NonEmptyVec::new(var.clone());
+                let new_ctx = ctx.extend(rib.into_iter());
+                let (t1, ty1, cs1) = self.convert_ast(s1, &new_ctx)?;
+                let (t2, ty2, cs2) = self.convert_ast(s2, &new_ctx)?;
+
+                let mut cs = ConstrSet::new();
+                cs.extend(cs1.into_iter());
+                cs.extend(cs2.into_iter());
+                cs.push((vty, ty1));
+
+                let subst = Analyser::unify(cs.clone())?;
+                self.apply_subst(&subst);
+
+                let fix = Rc::new(Term {
+                    kind: TermKind::Fix(var.clone(), t1),
+                });
+
+                Ok((
+                    Rc::new(Term {
+                        kind: TermKind::Let(var, fix, t2),
+                    }),
+                    ty2.apply(&subst),
+                    cs,
+                ))
+            }
+            Ast::Tuple(fst, snd, rest) => {
+                let (t1, ty1, cs1) = self.convert_ast(fst, ctx)?;
+                let (t2, ty2, cs2) = self.convert_ast(snd, ctx)?;
+                let ts_tys_css = rest
+                    .iter()
+                    .map(|t| self.convert_ast(t, ctx))
+                    .collect::<Result<Vec<_>>>()?;
+
+                let mut ts = Vec::new();
+                let mut tys = Vec::new();
+                let mut css = Vec::new();
+                css.extend(cs1.into_iter());
+                css.extend(cs2.into_iter());
+                for (t, ty, cs) in ts_tys_css {
+                    ts.push(t);
+                    tys.push(ty);
+                    css.extend(cs.into_iter());
+                }
+
+                Ok((
+                    Rc::new(Term {
+                        kind: TermKind::Tuple(t1, t2, ts),
+                    }),
+                    Type::Tuple(Box::new(ty1), Box::new(ty2), tys),
+                    css,
+                ))
+            }
+            Ast::TupleRef(i, t) => {
+                let (t, ty, mut cs) = self.convert_ast(t, ctx)?;
+
+                // create principal tuple type, the size of the
+                // rest vector is just the smallest size that will
+                // typecheck
+                let fst = Type::Var(Variable::new("T"));
+                let snd = Type::Var(Variable::new("T"));
+                let len = (i + 1).saturating_sub(2);
+                let mut rest = Vec::with_capacity(len);
+                for _ in 0..len {
+                    rest.push(Type::Var(Variable::new("T")));
+                }
+
+                let ttype = if *i == 0 {
+                    fst.clone()
+                } else if *i == 1 {
+                    snd.clone()
+                } else {
+                    // unwrap is safe because i > 1, so rest is not empty
+                    rest.last().map(Type::clone).unwrap()
+                };
+                let tuple_type = Type::Tuple(Box::new(fst), Box::new(snd), rest);
+
+                cs.push((ty, tuple_type));
+
+                let subst = Analyser::unify(cs.clone())?;
+                self.apply_subst(&subst);
+
+                Ok((
+                    Rc::new(Term {
+                        kind: TermKind::TupleRef(*i, t),
+                    }),
+                    ttype.apply(&subst),
+                    cs,
+                ))
+            }
+            Ast::BinOp(op, s1, s2) => {
+                let (t1, ty1, cs1) = self.convert_ast(s1, ctx)?;
+                let (t2, ty2, cs2) = self.convert_ast(s2, ctx)?;
+
+                let info = self
+                    .oper_table
+                    .iter()
+                    .find(|(o, _)| o == op)
+                    .map(|(_, i)| i.clone())
+                    .ok_or_else(|| Error::UnknownOperator(format!("Operator {} not found", op)))?;
+
+                let mut cs = ConstrSet::new();
+                cs.extend(cs1.into_iter());
+                cs.extend(cs2.into_iter());
+                cs.push((ty1, info.ltype));
+                cs.push((ty2, info.rtype));
+
+                let subst = Analyser::unify(cs.clone())?;
+                self.apply_subst(&subst);
+
+                Ok((
+                    Rc::new(Term {
+                        kind: TermKind::BinOp(op.clone(), t1, t2),
+                    }),
+                    info.ttype,
+                    cs,
+                ))
+            }
+        }
+    }
+
+    fn convert_lambda(
+        &mut self,
+        vars: NonEmptyVec<Variable>,
+        body: &Ast,
+        ctx: &Ctx,
+    ) -> Result<(Rc<Term>, Type, ConstrSet)> {
+        for var in &vars {
+            let ty = Type::Var(Variable::new("X"));
+            let ts = TypeScheme::new(ty);
+            self.sym_table.insert(var.clone(), ts);
+        }
+        let new_ctx = ctx.extend(vars.clone().into_iter());
+        let (t, mut ttype, cs) = self.convert_ast(body, &new_ctx)?;
+
+        let mut rvec = vars.clone().into_vec();
+        rvec.reverse();
+        for v in rvec {
+            let ptype = self
+                .sym_table
+                .get(&v)
+                .map(|ts| ts.ptype.clone())
+                .ok_or_else(|| {
+                    Error::VariableNotFound(format!("Variable {} was not found in symbol table", v))
+                })?;
+            ttype = Type::Func(Box::new(ptype), Box::new(ttype));
+        }
+        Ok((
+            Rc::new(Term {
+                kind: TermKind::Lam(vars, t),
+            }),
+            ttype,
+            cs,
+        ))
     }
 }
 
