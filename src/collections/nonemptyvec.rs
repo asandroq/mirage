@@ -10,13 +10,21 @@ pub struct NonEmptyVec<T> {
 }
 
 impl<T> NonEmptyVec<T> {
+    pub fn as_ref(&self) -> NonEmptyVec<&T> {
+        let (e, es) = self.parts();
+        let mut res = NonEmptyVec::new(e);
+        res.extend(es);
+
+        res
+    }
+
     /// The current length of the collection.
     pub fn len(&self) -> usize {
         self.rest.len() + 1
     }
 
     /// Creates a new collection with a single element.
-    pub fn new(elem: T) -> NonEmptyVec<T> {
+    pub fn new(elem: T) -> Self {
         NonEmptyVec {
             elem: Box::new(elem),
             rest: Vec::new(),
@@ -45,8 +53,8 @@ impl<T> NonEmptyVec<T> {
 
     /// Transforms elements using a given function and return a new
     /// collection.
-    pub fn map<U, F: Fn(&T) -> U>(&self, f: F) -> NonEmptyVec<U> {
-        let (e, es) = self.parts();
+    pub fn map<U, F: Fn(T) -> U>(self, f: F) -> NonEmptyVec<U> {
+        let (e, es) = self.into_parts();
         let mut res = NonEmptyVec::new(f(e));
         res.extend(es.map(f));
 
@@ -97,7 +105,7 @@ pub struct Iter<'a, T> {
 impl<'a, T: 'a> Iterator for Iter<'a, T> {
     type Item = &'a T;
 
-    fn next(&mut self) -> Option<&'a T> {
+    fn next(&mut self) -> Option<Self::Item> {
         match self.state {
             IterState::Elem => {
                 self.state = IterState::Rest;
@@ -194,7 +202,7 @@ mod test {
         let other = vec!["book", "is", "on", "the", "table"];
         coll.extend(other.into_iter());
 
-        let coll_ = coll.map(|s| s.len());
+        let coll_ = coll.map(str::len);
         let mut iter = coll_.into_iter();
         assert_eq!(iter.next(), Some(3));
         assert_eq!(iter.next(), Some(4));

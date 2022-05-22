@@ -1,6 +1,6 @@
 use super::{parser::Ast, Analyser, Term, Type};
 use crate::{
-    collections::{sharedlist::SharedList, nonemptyvec::NonEmptyVec},
+    collections::{nonemptyvec::NonEmptyVec, sharedlist::SharedList},
     error::{Error, Result},
     lang::{
         parser::{Parser, ParserCtx},
@@ -8,7 +8,7 @@ use crate::{
     },
 };
 use std::{
-    collections::{hash_map::Entry,HashMap, VecDeque},
+    collections::{hash_map::Entry, HashMap, VecDeque},
     rc::Rc,
 };
 
@@ -40,7 +40,12 @@ impl Interpreter {
         Ok(())
     }
 
-    fn load_decl(&mut self, anal: &mut Analyser, vars: NonEmptyVec<String>, ast: &Ast) -> Result<()> {
+    fn load_decl(
+        &mut self,
+        anal: &mut Analyser,
+        vars: NonEmptyVec<String>,
+        ast: &Ast,
+    ) -> Result<()> {
         let (var, mut rest) = vars.into_parts();
         if let Entry::Vacant(e) = self.globals.entry(var.clone()) {
             let (term, ttype) = if let Some(lvar) = rest.next() {

@@ -44,10 +44,6 @@ impl Variable {
             Variable { name, serial }
         }
     }
-
-    fn is_unused(&self) -> bool {
-        self.name.starts_with('_')
-    }
 }
 
 impl fmt::Debug for Variable {
@@ -206,9 +202,85 @@ impl TypeScheme {
     }
 }
 
+type Rib = NonEmptyVec<(Variable, TypeScheme)>;
+
 /// A typing context used to keep track of bound variables during type
 /// checking.
-pub type Ctx = SharedList<Variable>;
+#[derive(Clone, Debug)]
+pub struct Ctx(VecDeque<Rib>);
+
+impl Ctx {
+    fn apply_subst(self, subst: &TypeSubst) -> Self {
+        self.0
+            .into_iter()
+            .map(|rib| {
+                rib.map(|(var, mut ts)| {
+                    ts.ptype = ts.ptype.apply(subst);
+                    (var, ts)
+                })
+            })
+            .collect()
+    }
+
+    fn new() -> Self {
+        Self(VecDeque::new())
+    }
+
+    fn extend(&mut self, rib: Rib) {
+        self.0.push_front(rib);
+    }
+
+    fn extend_one(&mut self, var: Variable, ts: TypeScheme) {
+        self.0.push_front(NonEmptyVec::new((var, ts)));
+    }
+
+    fn find<F: Fn(&Variable) -> bool>(&self, f: F) -> Option<&(Variable, TypeScheme)> {
+        self.iter().find(|(v, _)| f(v))
+    }
+
+    fn iter(&self) -> CtxIter<'_> {
+        CtxIter {
+            rib: None,
+            ctx: self.0.iter(),
+        }
+    }
+
+    fn shrink(&mut self) -> Result<Rib> {
+        self.0.pop_front().ok_or(Error::EmptyContext)
+    }
+}
+
+impl FromIterator<Rib> for Ctx {
+    fn from_iter<T: IntoIterator<Item = Rib>>(iter: T) -> Self {
+        Self(VecDeque::from_iter(iter))
+    }
+}
+
+/// Iterator over variables in the context.
+struct CtxIter<'a> {
+    /// Iterator over a single rib.
+    rib: Option<crate::collections::nonemptyvec::Iter<'a, (Variable, TypeScheme)>>,
+
+    /// Iterator over the full context.
+    ctx: ::std::collections::vec_deque::Iter<'a, Rib>,
+}
+
+impl<'a> Iterator for CtxIter<'a> {
+    type Item = &'a (Variable, TypeScheme);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.rib.as_mut().and_then(Iterator::next).or_else(|| {
+            if let Some(next_rib) = self.ctx.next() {
+                let mut iter = next_rib.iter();
+                let next = iter.next();
+                self.rib = Some(iter);
+                next
+            } else {
+                None
+            }
+        })
+    }
+}
 
 /// An environment used to keep track of values of bound variables
 /// during evaluation.
@@ -223,6 +295,8 @@ fn subst_constraints(constrs: &mut ConstrSet, var: &Variable, ttype: &Type) {
         *rhs = rhs.clone().apply_one(var, ttype);
     }
 }
+
+type Typing = (Ctx, Rc<Term>, Type, ConstrSet);
 
 /// Kinds of terms of the language.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -372,9 +446,6 @@ type OperatorTable = Vec<(&'static str, OpInfo)>;
 struct Analyser {
     /// Table of known operators.
     oper_table: OperatorTable,
-
-    /// Symbol table with information about identifiers.
-    sym_table: HashMap<Variable, TypeScheme>,
 }
 
 impl Analyser {
@@ -454,7 +525,6 @@ impl Analyser {
                     },
                 ),
             ],
-            sym_table: HashMap::new(),
         }
     }
 
@@ -478,12 +548,6 @@ impl Analyser {
                     .map(Analyser::analyse_type)
                     .collect::<Result<Vec<_>>>()?,
             )),
-        }
-    }
-
-    fn apply_subst(&mut self, subst: &TypeSubst) {
-        for ts in self.sym_table.values_mut() {
-            ts.ptype = ts.ptype.clone().apply(subst);
         }
     }
 
@@ -546,19 +610,25 @@ impl Analyser {
     }
 
     fn typecheck(&mut self, ast: &Ast) -> Result<(Rc<Term>, Type)> {
-        self.convert_ast(ast, &SharedList::nil())
-            .map(|(t, ty, _)| (t, ty))
+        self.convert_ast(ast, Ctx::new())
+            .map(|(_, t, ty, _)| (t, ty))
     }
 
-    fn typecheck_lambda(&mut self, vars: &NonEmptyVec<String>, body: &Ast) -> Result<(Rc<Term>, Type)> {
-        let vars = vars.map(Variable::new);
-        self.convert_lambda(vars, body, &SharedList::nil()).map(|(term, ttype, _)| (term, ttype))
+    fn typecheck_lambda(
+        &mut self,
+        vars: &NonEmptyVec<String>,
+        body: &Ast,
+    ) -> Result<(Rc<Term>, Type)> {
+        let vars = vars.as_ref().map(Variable::new);
+        self.convert_lambda(vars, body, Ctx::new())
+            .map(|(_, term, ttype, _)| (term, ttype))
     }
 
     #[allow(clippy::too_many_lines)]
-    fn convert_ast(&mut self, ast: &Ast, ctx: &Ctx) -> Result<(Rc<Term>, Type, ConstrSet)> {
+    fn convert_ast(&mut self, ast: &Ast, ctx: Ctx) -> Result<Typing> {
         match ast {
             Ast::Unit => Ok((
+                ctx,
                 Rc::new(Term {
                     kind: TermKind::Unit,
                 }),
@@ -566,6 +636,7 @@ impl Analyser {
                 Vec::new(),
             )),
             Ast::Bool(b) => Ok((
+                ctx,
                 Rc::new(Term {
                     kind: TermKind::Bool(*b),
                 }),
@@ -573,6 +644,7 @@ impl Analyser {
                 Vec::new(),
             )),
             Ast::Int(i) => Ok((
+                ctx,
                 Rc::new(Term {
                     kind: TermKind::Int(*i),
                 }),
@@ -580,46 +652,37 @@ impl Analyser {
                 Vec::new(),
             )),
             Ast::Var(n) => {
-                let var = ctx.iter().find(|v| v.name == *n);
-                if let Some(var) = var {
-                    let ts = self.sym_table.get(&var).ok_or_else(|| {
-                        Error::VariableNotFound(format!(
-                            "Variable '{var}' was not found in symbol table"
-                        ))
-                    })?;
+                dbg!(&ctx);
+                let (var, ts) = ctx.find(|v| v.name == *n).cloned().ok_or_else(|| {
+                    Error::VariableNotFound(format!("Variable '{n}' was not found in context"))
+                })?;
 
-                    let ts = ts.clone();
+                // create fresh type variables for the free
+                // variables to allow polymorphism
+                let subst = ts
+                    .vars
+                    .into_iter()
+                    .map(|v| (v, Type::Var(Variable::new("P"))))
+                    .collect();
 
-                    // create fresh type variables for the free
-                    // variables to allow polymorphism
-                    let subst = ts
-                        .vars
-                        .into_iter()
-                        .map(|v| (v, Type::Var(Variable::new("P"))))
-                        .collect();
-
-                    Ok((
-                        Rc::new(Term {
-                            kind: TermKind::Var(var.as_ref().clone()),
-                        }),
-                        ts.ptype.apply(&subst),
-                        Vec::new(),
-                    ))
-                } else {
-                    Err(Error::VariableNotFound(format!(
-                        "Variable {n} is not in scope"
-                    )))
-                }
+                Ok((
+                    ctx,
+                    Rc::new(Term {
+                        kind: TermKind::Var(var),
+                    }),
+                    ts.ptype.apply(&subst),
+                    Vec::new(),
+                ))
             }
             Ast::Lam(vars, body) => {
-                let vars = vars.map(Variable::new);
+                let vars = vars.as_ref().map(Variable::new);
                 self.convert_lambda(vars, body, ctx)
             }
             Ast::App(s1, ss) => {
-                let (t1, ty1, cs1) = self.convert_ast(s1, ctx)?;
+                let (ctx, t1, ty1, cs1) = self.convert_ast(s1, ctx)?;
 
                 let (s2, ss) = ss.parts();
-                let (t2, ty2, cs2) = self.convert_ast(s2, ctx)?;
+                let (ctx, t2, ty2, cs2) = self.convert_ast(s2, ctx)?;
 
                 let mut ts = NonEmptyVec::new(t2);
 
@@ -630,11 +693,13 @@ impl Analyser {
                 cs.extend(cs1.into_iter());
                 cs.extend(cs2.into_iter());
 
+                let mut ctx = ctx;
                 for s in ss {
-                    let (t, ty, c) = self.convert_ast(s, ctx)?;
+                    let (next_ctx, t, ty, c) = self.convert_ast(s, ctx)?;
                     ts.push(t);
                     tys.push_front(ty);
                     cs.extend(c.into_iter());
+                    ctx = next_ctx;
                 }
 
                 let var = Type::Var(Variable::new("Y"));
@@ -645,9 +710,9 @@ impl Analyser {
 
                 cs.push((ty1, func_ty));
                 let subst = Analyser::unify(cs.clone())?;
-                self.apply_subst(&subst);
 
                 Ok((
+                    ctx.apply_subst(&subst),
                     Rc::new(Term {
                         kind: TermKind::App(t1, ts),
                     }),
@@ -656,9 +721,9 @@ impl Analyser {
                 ))
             }
             Ast::If(s1, s2, s3) => {
-                let (t1, ty1, cs1) = self.convert_ast(s1, ctx)?;
-                let (t2, ty2, cs2) = self.convert_ast(s2, ctx)?;
-                let (t3, ty3, cs3) = self.convert_ast(s3, ctx)?;
+                let (ctx, t1, ty1, cs1) = self.convert_ast(s1, ctx)?;
+                let (ctx, t2, ty2, cs2) = self.convert_ast(s2, ctx)?;
+                let (ctx, t3, ty3, cs3) = self.convert_ast(s3, ctx)?;
 
                 let mut cs = ConstrSet::new();
                 cs.extend(cs1.into_iter());
@@ -668,9 +733,9 @@ impl Analyser {
                 cs.push((ty2, ty3.clone()));
 
                 let subst = Analyser::unify(cs.clone())?;
-                self.apply_subst(&subst);
 
                 Ok((
+                    ctx.apply_subst(&subst),
                     Rc::new(Term {
                         kind: TermKind::If(t1, t2, t3),
                     }),
@@ -679,11 +744,11 @@ impl Analyser {
                 ))
             }
             Ast::Let(idents, expr, body) => {
-                let vars = idents.map(Variable::new);
+                let vars = idents.as_ref().map(Variable::new);
                 let (var, mut rest) = vars.into_parts();
 
                 // handle the case where the `let` expression is a lambda abstraction
-                let (expr, ty1, cs1) = if let Some(lvar) = rest.next() {
+                let (mut ctx, expr, ty1, mut cs) = if let Some(lvar) = rest.next() {
                     let mut lvars = NonEmptyVec::new(lvar);
                     lvars.extend(rest);
                     self.convert_lambda(lvars, expr, ctx)?
@@ -695,31 +760,22 @@ impl Analyser {
                     .vars()
                     .into_iter()
                     .filter(|v| {
-                        ctx.iter().all(|v1| {
-                            self.sym_table
-                                .get(&v1)
-                                .map_or(true, |ts| !ts.ptype.vars().contains(v))
-                        })
+                        ctx.find(|v2| v == v2)
+                            .map_or(true, |(_, ts)| !ts.ptype.vars().contains(v))
                     })
                     .collect();
                 let ts = TypeScheme {
                     ptype: ty1,
                     vars: tvars,
                 };
-                self.sym_table.insert(var.clone(), ts);
 
-                let rib = NonEmptyVec::new(var.clone());
-                let (body, ty2, cs2) = if var.is_unused() {
-                    self.convert_ast(body, ctx)?
-                } else {
-                    let new_ctx = ctx.extend(rib.into_iter());
-                    self.convert_ast(body, &new_ctx)?
-                };
+                ctx.extend_one(var.clone(), ts);
+                let (mut ctx, body, ty2, cs2) = self.convert_ast(body, ctx)?;
+                ctx.shrink()?;
 
-                let mut cs = cs1;
                 cs.extend(cs2.into_iter());
-
                 Ok((
+                    ctx,
                     Rc::new(Term {
                         kind: TermKind::Let(var, expr, body),
                     }),
@@ -727,59 +783,58 @@ impl Analyser {
                     cs,
                 ))
             }
-            Ast::Letrec(v, oty, s1, s2) => {
+            Ast::Letrec(v, oty, expr, body) => {
                 let var = Variable::new(v);
                 let vty = oty
                     .as_ref()
                     .map_or(Ok(Type::Var(Variable::new("F"))), Analyser::analyse_type)?;
                 let ts = TypeScheme::new(vty.clone());
-                self.sym_table.insert(var.clone(), ts);
 
-                let rib = NonEmptyVec::new(var.clone());
-                let new_ctx = ctx.extend(rib.into_iter());
-                let (t1, ty1, cs1) = self.convert_ast(s1, &new_ctx)?;
-                let (t2, ty2, cs2) = self.convert_ast(s2, &new_ctx)?;
+                let mut ctx = ctx;
+                ctx.extend_one(var.clone(), ts);
+                let (ctx, expr, ty1, cs1) = self.convert_ast(expr, ctx)?;
+                let (mut ctx, body, ty2, cs2) = self.convert_ast(body, ctx)?;
+                ctx.shrink()?;
 
                 let mut cs = ConstrSet::new();
                 cs.extend(cs1.into_iter());
                 cs.extend(cs2.into_iter());
                 cs.push((vty, ty1));
-
                 let subst = Analyser::unify(cs.clone())?;
-                self.apply_subst(&subst);
 
                 let fix = Rc::new(Term {
-                    kind: TermKind::Fix(var.clone(), t1),
+                    kind: TermKind::Fix(var.clone(), expr),
                 });
 
                 Ok((
+                    ctx.apply_subst(&subst),
                     Rc::new(Term {
-                        kind: TermKind::Let(var, fix, t2),
+                        kind: TermKind::Let(var, fix, body),
                     }),
                     ty2.apply(&subst),
                     cs,
                 ))
             }
             Ast::Tuple(fst, snd, rest) => {
-                let (t1, ty1, cs1) = self.convert_ast(fst, ctx)?;
-                let (t2, ty2, cs2) = self.convert_ast(snd, ctx)?;
-                let ts_tys_css = rest
-                    .iter()
-                    .map(|t| self.convert_ast(t, ctx))
-                    .collect::<Result<Vec<_>>>()?;
+                let (ctx, t1, ty1, cs1) = self.convert_ast(fst, ctx)?;
+                let (ctx, t2, ty2, cs2) = self.convert_ast(snd, ctx)?;
 
-                let mut ts = Vec::new();
-                let mut tys = Vec::new();
                 let mut css = Vec::new();
                 css.extend(cs1.into_iter());
                 css.extend(cs2.into_iter());
-                for (t, ty, cs) in ts_tys_css {
-                    ts.push(t);
-                    tys.push(ty);
-                    css.extend(cs.into_iter());
-                }
+                let (ctx, ts, tys, css) = rest.iter().try_fold(
+                    (ctx, Vec::new(), Vec::new(), css),
+                    |(ctx, mut ts, mut tys, mut css), ast| {
+                        let (ctx, t, ty, cs) = self.convert_ast(ast, ctx)?;
+                        ts.push(t);
+                        tys.push(ty);
+                        css.extend(cs.into_iter());
+                        Ok::<_, Error>((ctx, ts, tys, css))
+                    },
+                )?;
 
                 Ok((
+                    ctx,
                     Rc::new(Term {
                         kind: TermKind::Tuple(t1, t2, ts),
                     }),
@@ -788,7 +843,7 @@ impl Analyser {
                 ))
             }
             Ast::TupleRef(i, t) => {
-                let (t, ty, mut cs) = self.convert_ast(t, ctx)?;
+                let (ctx, t, ty, mut cs) = self.convert_ast(t, ctx)?;
 
                 // create principal tuple type, the size of the
                 // rest vector is just the smallest size that will
@@ -814,9 +869,9 @@ impl Analyser {
                 cs.push((ty, tuple_type));
 
                 let subst = Analyser::unify(cs.clone())?;
-                self.apply_subst(&subst);
 
                 Ok((
+                    ctx.apply_subst(&subst),
                     Rc::new(Term {
                         kind: TermKind::TupleRef(*i, t),
                     }),
@@ -825,8 +880,8 @@ impl Analyser {
                 ))
             }
             Ast::BinOp(op, s1, s2) => {
-                let (t1, ty1, cs1) = self.convert_ast(s1, ctx)?;
-                let (t2, ty2, cs2) = self.convert_ast(s2, ctx)?;
+                let (ctx, t1, ty1, cs1) = self.convert_ast(s1, ctx)?;
+                let (ctx, t2, ty2, cs2) = self.convert_ast(s2, ctx)?;
 
                 let info = self
                     .oper_table
@@ -842,9 +897,9 @@ impl Analyser {
                 cs.push((ty2, info.rtype));
 
                 let subst = Analyser::unify(cs.clone())?;
-                self.apply_subst(&subst);
 
                 Ok((
+                    ctx.apply_subst(&subst),
                     Rc::new(Term {
                         kind: TermKind::BinOp(op.clone(), t1, t2),
                     }),
@@ -859,29 +914,24 @@ impl Analyser {
         &mut self,
         vars: NonEmptyVec<Variable>,
         body: &Ast,
-        ctx: &Ctx,
-    ) -> Result<(Rc<Term>, Type, ConstrSet)> {
-        for var in &vars {
+        mut ctx: Ctx,
+    ) -> Result<Typing> {
+        let rib = vars.as_ref().map(|v| {
             let ty = Type::Var(Variable::new("X"));
             let ts = TypeScheme::new(ty);
-            self.sym_table.insert(var.clone(), ts);
-        }
-        let new_ctx = ctx.extend(vars.clone().into_iter());
-        let (t, mut ttype, cs) = self.convert_ast(body, &new_ctx)?;
+            (v.clone(), ts)
+        });
+        ctx.extend(rib);
+        let (mut ctx, t, mut ttype, cs) = self.convert_ast(body, ctx)?;
 
-        let mut rvec = vars.clone().into_vec();
+        let rib = ctx.shrink()?;
+        let mut rvec = rib.into_vec();
         rvec.reverse();
-        for v in rvec {
-            let ptype = self
-                .sym_table
-                .get(&v)
-                .map(|ts| ts.ptype.clone())
-                .ok_or_else(|| {
-                    Error::VariableNotFound(format!("Variable {} was not found in symbol table", v))
-                })?;
-            ttype = Type::Func(Box::new(ptype), Box::new(ttype));
+        for (_, ts) in rvec {
+            ttype = Type::Func(Box::new(ts.ptype), Box::new(ttype));
         }
         Ok((
+            ctx,
             Rc::new(Term {
                 kind: TermKind::Lam(vars, t),
             }),

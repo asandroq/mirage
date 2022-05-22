@@ -5,6 +5,9 @@ pub enum Error {
     #[error("{0}")]
     DuplicateGlobal(String),
 
+    #[error("Empty variable context")]
+    EmptyContext,
+
     #[error("{0}")]
     FromInt(#[from] std::num::TryFromIntError),
 
