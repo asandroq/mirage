@@ -286,13 +286,91 @@ impl<'a> Iterator for CtxIter<'a> {
 /// during evaluation.
 pub type Env = SharedList<(Variable, Rc<Term>)>;
 
-type ConstrSet = Vec<(Type, Type)>;
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConstrSet(Vec<(Type, Type)>);
 
-/// Applies a type substitution to all types in a constraint set.
-fn subst_constraints(constrs: &mut ConstrSet, var: &Variable, ttype: &Type) {
-    for (lhs, rhs) in constrs {
-        *lhs = lhs.clone().apply_one(var, ttype);
-        *rhs = rhs.clone().apply_one(var, ttype);
+impl ConstrSet {
+    /// Add a new constraint to the set.
+    fn add(&mut self, lhs: Type, rhs: Type) {
+        self.0.push((lhs, rhs));
+    }
+
+    /// Append all constraints of other set to this one.
+    fn append(&mut self, mut cs: ConstrSet) {
+        self.0.append(&mut cs.0)
+    }
+
+    /// Create a new constraints set.
+    fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    /// Apply a type substitution to all types in a constraints set.
+    fn subst_constraints(self, var: &Variable, ttype: &Type) -> Self {
+        let vec = self.0.into_iter().map(|(lhs, rhs)| {
+            let lhs = lhs.apply_one(var, ttype);
+            let rhs = rhs.apply_one(var, ttype);
+            (lhs, rhs)
+        })
+        .collect();
+
+        Self(vec)
+    }
+
+    fn unify(&self) -> Result<TypeSubst> {
+        let mut cs = self.clone();
+        let mut subst = Vec::new();
+        while let Some((lhs, rhs)) = cs.0.pop() {
+            if lhs != rhs {
+                if let Type::Var(v) = lhs {
+                    if rhs.vars().contains(&v) {
+                        return Err(Error::InfiniteType(format!(
+                            "Type variable {v} refers to itself",
+                        )));
+                    }
+                    cs = cs.subst_constraints(&v, &rhs);
+                    subst.push((v, rhs));
+                } else if let Type::Var(v) = rhs {
+                    if lhs.vars().contains(&v) {
+                        return Err(Error::InfiniteType(format!(
+                            "Type variable {v} refers to itself",
+                        )));
+                    }
+                    cs = cs.subst_constraints(&v, &lhs);
+                    subst.push((v, lhs));
+                } else if let Type::Func(lhs1, lhs2) = lhs {
+                    if let Type::Func(rhs1, rhs2) = rhs {
+                        cs.0.push((*lhs1, *rhs1));
+                        cs.0.push((*lhs2, *rhs2));
+                    } else {
+                        return Err(Error::TypeMismatch(format!(
+                            "{:?} is not a function type",
+                            rhs
+                        )));
+                    }
+                } else if let Type::Tuple(lfst, lsnd, lrest) = lhs {
+                    if let Type::Tuple(rfst, rsnd, rrest) = rhs {
+                        cs.0.push((*lfst, *rfst));
+                        cs.0.push((*lsnd, *rsnd));
+                        for (l, r) in lrest.into_iter().zip(rrest.into_iter()) {
+                            cs.0.push((l, r));
+                        }
+                    } else {
+                        return Err(Error::TypeMismatch(format!(
+                            "{:?} is not a tuple type",
+                            rhs
+                        )));
+                    }
+                } else {
+                    return Err(Error::TypeMismatch(format!(
+                        "Cannot unify the types {:?} and {:?}",
+                        lhs, rhs
+                    )));
+                }
+            }
+        }
+
+        Ok(subst)
     }
 }
 
@@ -551,64 +629,6 @@ impl Analyser {
         }
     }
 
-    fn unify(mut constraints: ConstrSet) -> Result<TypeSubst> {
-        let mut subst = Vec::new();
-
-        while let Some((lhs, rhs)) = constraints.pop() {
-            if lhs != rhs {
-                if let Type::Var(v) = lhs {
-                    if rhs.vars().contains(&v) {
-                        return Err(Error::InfiniteType(format!(
-                            "Type variable {} refers to itself",
-                            v
-                        )));
-                    }
-                    subst_constraints(&mut constraints, &v, &rhs);
-                    subst.push((v, rhs));
-                } else if let Type::Var(v) = rhs {
-                    if lhs.vars().contains(&v) {
-                        return Err(Error::InfiniteType(format!(
-                            "Type variable {} refers to itself",
-                            v
-                        )));
-                    }
-                    subst_constraints(&mut constraints, &v, &lhs);
-                    subst.push((v, lhs));
-                } else if let Type::Func(lhs1, lhs2) = lhs {
-                    if let Type::Func(rhs1, rhs2) = rhs {
-                        constraints.push((*lhs1, *rhs1));
-                        constraints.push((*lhs2, *rhs2));
-                    } else {
-                        return Err(Error::TypeMismatch(format!(
-                            "{:?} is not a function type",
-                            rhs
-                        )));
-                    }
-                } else if let Type::Tuple(lfst, lsnd, lrest) = lhs {
-                    if let Type::Tuple(rfst, rsnd, rrest) = rhs {
-                        constraints.push((*lfst, *rfst));
-                        constraints.push((*lsnd, *rsnd));
-                        for (l, r) in lrest.into_iter().zip(rrest.into_iter()) {
-                            constraints.push((l, r));
-                        }
-                    } else {
-                        return Err(Error::TypeMismatch(format!(
-                            "{:?} is not a tuple type",
-                            rhs
-                        )));
-                    }
-                } else {
-                    return Err(Error::TypeMismatch(format!(
-                        "Cannot unify the types {:?} and {:?}",
-                        lhs, rhs
-                    )));
-                }
-            }
-        }
-
-        Ok(subst)
-    }
-
     fn typecheck(&mut self, ast: &Ast) -> Result<(Rc<Term>, Type)> {
         self.convert_ast(ast, Ctx::new())
             .map(|(_, t, ty, _)| (t, ty))
@@ -633,7 +653,7 @@ impl Analyser {
                     kind: TermKind::Unit,
                 }),
                 Type::Unit,
-                Vec::new(),
+                ConstrSet::new(),
             )),
             Ast::Bool(b) => Ok((
                 ctx,
@@ -641,7 +661,7 @@ impl Analyser {
                     kind: TermKind::Bool(*b),
                 }),
                 Type::Bool,
-                Vec::new(),
+                ConstrSet::new(),
             )),
             Ast::Int(i) => Ok((
                 ctx,
@@ -649,7 +669,7 @@ impl Analyser {
                     kind: TermKind::Int(*i),
                 }),
                 Type::Int,
-                Vec::new(),
+                ConstrSet::new(),
             )),
             Ast::Var(n) => {
                 dbg!(&ctx);
@@ -671,7 +691,7 @@ impl Analyser {
                         kind: TermKind::Var(var),
                     }),
                     ts.ptype.apply(&subst),
-                    Vec::new(),
+                    ConstrSet::new(),
                 ))
             }
             Ast::Lam(vars, body) => {
@@ -690,15 +710,15 @@ impl Analyser {
                 tys.push_front(ty2);
 
                 let mut cs = ConstrSet::new();
-                cs.extend(cs1.into_iter());
-                cs.extend(cs2.into_iter());
+                cs.append(cs1);
+                cs.append(cs2);
 
                 let mut ctx = ctx;
                 for s in ss {
                     let (next_ctx, t, ty, c) = self.convert_ast(s, ctx)?;
                     ts.push(t);
                     tys.push_front(ty);
-                    cs.extend(c.into_iter());
+                    cs.append(c);
                     ctx = next_ctx;
                 }
 
@@ -708,8 +728,8 @@ impl Analyser {
                     func_ty = Type::Func(Box::new(ty), Box::new(func_ty));
                 }
 
-                cs.push((ty1, func_ty));
-                let subst = Analyser::unify(cs.clone())?;
+                cs.add(ty1, func_ty);
+                let subst = cs.unify()?;
 
                 Ok((
                     ctx.apply_subst(&subst),
@@ -726,13 +746,13 @@ impl Analyser {
                 let (ctx, t3, ty3, cs3) = self.convert_ast(s3, ctx)?;
 
                 let mut cs = ConstrSet::new();
-                cs.extend(cs1.into_iter());
-                cs.extend(cs2.into_iter());
-                cs.extend(cs3.into_iter());
-                cs.push((ty1, Type::Bool));
-                cs.push((ty2, ty3.clone()));
+                cs.append(cs1);
+                cs.append(cs2);
+                cs.append(cs3);
+                cs.add(ty1, Type::Bool);
+                cs.add(ty2, ty3.clone());
 
-                let subst = Analyser::unify(cs.clone())?;
+                let subst = cs.unify()?;
 
                 Ok((
                     ctx.apply_subst(&subst),
@@ -773,7 +793,7 @@ impl Analyser {
                 let (mut ctx, body, ty2, cs2) = self.convert_ast(body, ctx)?;
                 ctx.shrink()?;
 
-                cs.extend(cs2.into_iter());
+                cs.append(cs2);
                 Ok((
                     ctx,
                     Rc::new(Term {
@@ -797,10 +817,10 @@ impl Analyser {
                 ctx.shrink()?;
 
                 let mut cs = ConstrSet::new();
-                cs.extend(cs1.into_iter());
-                cs.extend(cs2.into_iter());
-                cs.push((vty, ty1));
-                let subst = Analyser::unify(cs.clone())?;
+                cs.append(cs1);
+                cs.append(cs2);
+                cs.add(vty, ty1);
+                let subst = cs.unify()?;
 
                 let fix = Rc::new(Term {
                     kind: TermKind::Fix(var.clone(), expr),
@@ -819,16 +839,16 @@ impl Analyser {
                 let (ctx, t1, ty1, cs1) = self.convert_ast(fst, ctx)?;
                 let (ctx, t2, ty2, cs2) = self.convert_ast(snd, ctx)?;
 
-                let mut css = Vec::new();
-                css.extend(cs1.into_iter());
-                css.extend(cs2.into_iter());
+                let mut css = ConstrSet::new();
+                css.append(cs1);
+                css.append(cs2);
                 let (ctx, ts, tys, css) = rest.iter().try_fold(
                     (ctx, Vec::new(), Vec::new(), css),
                     |(ctx, mut ts, mut tys, mut css), ast| {
                         let (ctx, t, ty, cs) = self.convert_ast(ast, ctx)?;
                         ts.push(t);
                         tys.push(ty);
-                        css.extend(cs.into_iter());
+                        css.append(cs);
                         Ok::<_, Error>((ctx, ts, tys, css))
                     },
                 )?;
@@ -866,9 +886,9 @@ impl Analyser {
                 };
                 let tuple_type = Type::Tuple(Box::new(fst), Box::new(snd), rest);
 
-                cs.push((ty, tuple_type));
+                cs.add(ty, tuple_type);
 
-                let subst = Analyser::unify(cs.clone())?;
+                let subst = cs.unify()?;
 
                 Ok((
                     ctx.apply_subst(&subst),
@@ -891,12 +911,12 @@ impl Analyser {
                     .ok_or_else(|| Error::UnknownOperator(format!("Operator {} not found", op)))?;
 
                 let mut cs = ConstrSet::new();
-                cs.extend(cs1.into_iter());
-                cs.extend(cs2.into_iter());
-                cs.push((ty1, info.ltype));
-                cs.push((ty2, info.rtype));
+                cs.append(cs1);
+                cs.append(cs2);
+                cs.add(ty1, info.ltype);
+                cs.add(ty2, info.rtype);
 
-                let subst = Analyser::unify(cs.clone())?;
+                let subst = cs.unify()?;
 
                 Ok((
                     ctx.apply_subst(&subst),
