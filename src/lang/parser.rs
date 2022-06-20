@@ -1,4 +1,4 @@
-//! * Parser for the Mirage language.
+//! Parser for the Mirage language.
 
 use crate::collections::nonemptyvec::NonEmptyVec;
 use std::fmt;

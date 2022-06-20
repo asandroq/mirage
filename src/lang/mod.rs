@@ -1,4 +1,4 @@
-//! * Mirage's built-in programming language.
+//! Mirage's built-in programming language.
 
 pub mod interp;
 pub mod parser;
@@ -10,7 +10,7 @@ use crate::{
 use parser::Ast;
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{hash_map::Entry, HashMap, HashSet, VecDeque},
     fmt,
     rc::Rc,
     sync::atomic::{AtomicUsize, Ordering},
@@ -26,35 +26,57 @@ static SYM_COUNTER: AtomicUsize = AtomicUsize::new(1);
 ///
 /// Variables can stand for both values and types.
 #[derive(Clone, Eq, Hash, PartialEq)]
-pub struct Variable {
-    /// Variable name given in the source code.
-    name: String,
+pub enum Variable {
+    /// Global variables.
+    ///
+    /// These don't have a serial number because it's an error to have
+    /// more than one global variable with the same name in the same
+    /// scope.
+    Global(String),
 
-    /// Serial number for creating unique variables.
-    serial: usize,
+    /// Local variables.
+    ///
+    /// These are introduced either by an abstraction or a ``let``
+    /// term. They have a serial number to avoid the need to
+    /// alpha-rename them.
+    Local(String, usize),
 }
 
 impl Variable {
-    fn new<S: ToString + ?Sized>(name: &S) -> Variable {
+    fn global<S: ToString + ?Sized>(name: &S) -> Variable {
+        Self::Global(name.to_string())
+    }
+
+    fn local<S: ToString + ?Sized>(name: &S) -> Variable {
         let name = name.to_string();
         if name == "_" {
-            Variable { name, serial: 0 }
+            Variable::Local(name, 0)
         } else {
-            let serial = SYM_COUNTER.fetch_add(1, Ordering::Relaxed);
-            Variable { name, serial }
+            Variable::Local(name, SYM_COUNTER.fetch_add(1, Ordering::Relaxed))
+        }
+    }
+
+    fn name(&self) -> &str {
+        match self {
+            Self::Global(name) | Self::Local(name, _) => name,
         }
     }
 }
 
 impl fmt::Debug for Variable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}@{}", self.name, self.serial)
+        match self {
+            Self::Global(name) => name.fmt(f),
+            Self::Local(name, serial) => write!(f, "{}@{}", name, serial),
+        }
     }
 }
 
 impl fmt::Display for Variable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.name.fmt(f)
+        match self {
+            Self::Global(name) | Self::Local(name, _) => name.fmt(f),
+        }
     }
 }
 
@@ -194,9 +216,16 @@ struct TypeScheme {
 }
 
 impl TypeScheme {
-    fn new(t: Type) -> TypeScheme {
+    fn new(t: Type) -> Self {
         TypeScheme {
             ptype: t,
+            vars: Vec::new(),
+        }
+    }
+
+    fn new_var<S: ToString + ?Sized>(name: &S) -> Self {
+        TypeScheme {
+            ptype: Type::Var(Variable::local(name)),
             vars: Vec::new(),
         }
     }
@@ -222,10 +251,6 @@ impl Ctx {
             .collect()
     }
 
-    fn new() -> Self {
-        Self(VecDeque::new())
-    }
-
     fn extend(&mut self, rib: Rib) {
         self.0.push_front(rib);
     }
@@ -245,8 +270,18 @@ impl Ctx {
         }
     }
 
+    fn new() -> Self {
+        Self(VecDeque::new())
+    }
+
     fn shrink(&mut self) -> Result<Rib> {
         self.0.pop_front().ok_or(Error::EmptyContext)
+    }
+}
+
+impl From<Rib> for Ctx {
+    fn from(rib: Rib) -> Self {
+        Self(VecDeque::from([rib]))
     }
 }
 
@@ -297,7 +332,7 @@ impl ConstrSet {
 
     /// Append all constraints of other set to this one.
     fn append(&mut self, mut cs: ConstrSet) {
-        self.0.append(&mut cs.0)
+        self.0.append(&mut cs.0);
     }
 
     /// Create a new constraints set.
@@ -307,12 +342,15 @@ impl ConstrSet {
 
     /// Apply a type substitution to all types in a constraints set.
     fn subst_constraints(self, var: &Variable, ttype: &Type) -> Self {
-        let vec = self.0.into_iter().map(|(lhs, rhs)| {
-            let lhs = lhs.apply_one(var, ttype);
-            let rhs = rhs.apply_one(var, ttype);
-            (lhs, rhs)
-        })
-        .collect();
+        let vec = self
+            .0
+            .into_iter()
+            .map(|(lhs, rhs)| {
+                let lhs = lhs.apply_one(var, ttype);
+                let rhs = rhs.apply_one(var, ttype);
+                (lhs, rhs)
+            })
+            .collect();
 
         Self(vec)
     }
@@ -343,10 +381,9 @@ impl ConstrSet {
                         cs.0.push((*lhs1, *rhs1));
                         cs.0.push((*lhs2, *rhs2));
                     } else {
-                        return Err(Error::TypeMismatch(format!(
-                            "{:?} is not a function type",
-                            rhs
-                        )));
+                        return Err(Error::TypeMismatch(
+                            format!("{rhs} is not a function type",),
+                        ));
                     }
                 } else if let Type::Tuple(lfst, lsnd, lrest) = lhs {
                     if let Type::Tuple(rfst, rsnd, rrest) = rhs {
@@ -356,15 +393,11 @@ impl ConstrSet {
                             cs.0.push((l, r));
                         }
                     } else {
-                        return Err(Error::TypeMismatch(format!(
-                            "{:?} is not a tuple type",
-                            rhs
-                        )));
+                        return Err(Error::TypeMismatch(format!("{rhs} is not a tuple type",)));
                     }
                 } else {
                     return Err(Error::TypeMismatch(format!(
-                        "Cannot unify the types {:?} and {:?}",
-                        lhs, rhs
+                        "Cannot unify the types {lhs} and {rhs}",
                     )));
                 }
             }
@@ -629,19 +662,8 @@ impl Analyser {
         }
     }
 
-    fn typecheck(&mut self, ast: &Ast) -> Result<(Rc<Term>, Type)> {
-        self.convert_ast(ast, Ctx::new())
-            .map(|(_, t, ty, _)| (t, ty))
-    }
-
-    fn typecheck_lambda(
-        &mut self,
-        vars: &NonEmptyVec<String>,
-        body: &Ast,
-    ) -> Result<(Rc<Term>, Type)> {
-        let vars = vars.as_ref().map(Variable::new);
-        self.convert_lambda(vars, body, Ctx::new())
-            .map(|(_, term, ttype, _)| (term, ttype))
+    fn typecheck(&mut self, ast: &Ast, ctx: Ctx) -> Result<(Rc<Term>, Type)> {
+        self.convert_ast(ast, ctx).map(|(_, t, ty, _)| (t, ty))
     }
 
     #[allow(clippy::too_many_lines)]
@@ -672,8 +694,7 @@ impl Analyser {
                 ConstrSet::new(),
             )),
             Ast::Var(n) => {
-                dbg!(&ctx);
-                let (var, ts) = ctx.find(|v| v.name == *n).cloned().ok_or_else(|| {
+                let (var, ts) = ctx.find(|v| v.name() == *n).cloned().ok_or_else(|| {
                     Error::VariableNotFound(format!("Variable '{n}' was not found in context"))
                 })?;
 
@@ -682,7 +703,7 @@ impl Analyser {
                 let subst = ts
                     .vars
                     .into_iter()
-                    .map(|v| (v, Type::Var(Variable::new("P"))))
+                    .map(|v| (v, Type::Var(Variable::local("P"))))
                     .collect();
 
                 Ok((
@@ -695,7 +716,7 @@ impl Analyser {
                 ))
             }
             Ast::Lam(vars, body) => {
-                let vars = vars.as_ref().map(Variable::new);
+                let vars = vars.as_ref().map(Variable::local);
                 self.convert_lambda(vars, body, ctx)
             }
             Ast::App(s1, ss) => {
@@ -722,7 +743,7 @@ impl Analyser {
                     ctx = next_ctx;
                 }
 
-                let var = Type::Var(Variable::new("Y"));
+                let var = Type::Var(Variable::local("Y"));
                 let mut func_ty = var.clone();
                 for ty in tys {
                     func_ty = Type::Func(Box::new(ty), Box::new(func_ty));
@@ -764,7 +785,7 @@ impl Analyser {
                 ))
             }
             Ast::Let(idents, expr, body) => {
-                let vars = idents.as_ref().map(Variable::new);
+                let vars = idents.as_ref().map(Variable::local);
                 let (var, mut rest) = vars.into_parts();
 
                 // handle the case where the `let` expression is a lambda abstraction
@@ -776,6 +797,8 @@ impl Analyser {
                     self.convert_ast(expr, ctx)?
                 };
 
+                // Only variables not bound in context can be
+                // universally quantified
                 let tvars = ty1
                     .vars()
                     .into_iter()
@@ -803,23 +826,24 @@ impl Analyser {
                     cs,
                 ))
             }
-            Ast::Letrec(v, oty, expr, body) => {
-                let var = Variable::new(v);
-                let vty = oty
-                    .as_ref()
-                    .map_or(Ok(Type::Var(Variable::new("F"))), Analyser::analyse_type)?;
-                let ts = TypeScheme::new(vty.clone());
+            Ast::Letrec(v, otype, expr, body) => {
+                let var = Variable::local(v);
+                let var_type = otype.as_ref().map_or(
+                    Ok(Type::Var(Variable::local("FIX"))),
+                    Analyser::analyse_type,
+                )?;
+                let ts = TypeScheme::new(var_type.clone());
 
                 let mut ctx = ctx;
                 ctx.extend_one(var.clone(), ts);
-                let (ctx, expr, ty1, cs1) = self.convert_ast(expr, ctx)?;
-                let (mut ctx, body, ty2, cs2) = self.convert_ast(body, ctx)?;
+                let (ctx, expr, expr_type, expr_cs) = self.convert_ast(expr, ctx)?;
+                let (mut ctx, body, body_type, body_cs) = self.convert_ast(body, ctx)?;
                 ctx.shrink()?;
 
                 let mut cs = ConstrSet::new();
-                cs.append(cs1);
-                cs.append(cs2);
-                cs.add(vty, ty1);
+                cs.append(expr_cs);
+                cs.append(body_cs);
+                cs.add(var_type, expr_type);
                 let subst = cs.unify()?;
 
                 let fix = Rc::new(Term {
@@ -831,7 +855,7 @@ impl Analyser {
                     Rc::new(Term {
                         kind: TermKind::Let(var, fix, body),
                     }),
-                    ty2.apply(&subst),
+                    body_type.apply(&subst),
                     cs,
                 ))
             }
@@ -868,12 +892,12 @@ impl Analyser {
                 // create principal tuple type, the size of the
                 // rest vector is just the smallest size that will
                 // typecheck
-                let fst = Type::Var(Variable::new("T"));
-                let snd = Type::Var(Variable::new("T"));
+                let fst = Type::Var(Variable::local("T"));
+                let snd = Type::Var(Variable::local("T"));
                 let len = (i + 1).saturating_sub(2);
                 let mut rest = Vec::with_capacity(len);
                 for _ in 0..len {
-                    rest.push(Type::Var(Variable::new("T")));
+                    rest.push(Type::Var(Variable::local("T")));
                 }
 
                 let ttype = if *i == 0 {
@@ -937,7 +961,7 @@ impl Analyser {
         mut ctx: Ctx,
     ) -> Result<Typing> {
         let rib = vars.as_ref().map(|v| {
-            let ty = Type::Var(Variable::new("X"));
+            let ty = Type::Var(Variable::local("X"));
             let ts = TypeScheme::new(ty);
             (v.clone(), ts)
         });
@@ -961,6 +985,87 @@ impl Analyser {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct ModuleEntry {
+    term: Rc<Term>,
+    tscm: TypeScheme,
+}
+
+#[derive(Debug)]
+pub struct Module {
+    items: HashMap<Variable, ModuleEntry>,
+}
+
+impl Module {
+    fn load(src: &parser::Module) -> Result<Self> {
+        let mut scope = HashMap::new();
+
+        // check for duplicate names in the module scope
+        for (names, ast) in &src.decls {
+            let (name, args) = names.parts();
+            let var = Variable::global(name);
+            let args = args.map(Variable::local);
+            if let Entry::Vacant(e) = scope.entry(var) {
+                e.insert((args, ast));
+            } else {
+                return Err(Error::DuplicateGlobal(name.clone()));
+            }
+        }
+
+        let mut rib_iter = scope
+            .keys()
+            .map(|var| (var.clone(), TypeScheme::new_var("M")));
+
+        let items = if let Some((var, ts)) = rib_iter.next() {
+            let mut rib = NonEmptyVec::new((var, ts));
+            rib.extend(rib_iter);
+
+            let ctx = rib.into();
+            let mut anal = Analyser::new();
+            let (_, items) = scope.into_iter().try_fold(
+                (ctx, HashMap::new()),
+                |(ctx, mut items), (var, (mut args, ast))| {
+                    let (ctx, expr, ty, _) = if let Some(lvar) = args.next() {
+                        let mut lvars = NonEmptyVec::new(lvar);
+                        lvars.extend(args);
+                        anal.convert_lambda(lvars, ast, ctx)?
+                    } else {
+                        anal.convert_ast(ast, ctx)?
+                    };
+
+                    // Only variables not bound in context can be
+                    // universally quantified
+                    let tvars = ty
+                        .vars()
+                        .into_iter()
+                        .filter(|v| {
+                            ctx.find(|v2| v == v2)
+                                .map_or(true, |(_, ts)| !ts.ptype.vars().contains(v))
+                        })
+                        .collect();
+                    let tscm = TypeScheme {
+                        ptype: ty,
+                        vars: tvars,
+                    };
+
+                    // All top-level values can refer to themselves.
+                    let term = Rc::new(Term {
+                        kind: TermKind::Fix(var.clone(), expr),
+                    });
+                    let entry = ModuleEntry { term, tscm };
+                    items.insert(var, entry);
+                    Ok::<_, Error>((ctx, items))
+                },
+            )?;
+            items
+        } else {
+            HashMap::new()
+        };
+
+        Ok(Module { items })
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -972,7 +1077,7 @@ mod test {
         let sterm = parser.parse()?;
 
         let mut anal = Analyser::new();
-        let (_, ttype) = anal.typecheck(&sterm)?;
+        let (_, ttype) = anal.typecheck(&sterm, Ctx::new())?;
 
         Ok(ttype)
     }
@@ -1052,7 +1157,7 @@ mod test {
         let mut parser = parser::Parser::new(&mut ctx, input.chars(), "tests".to_string());
         let sterm = parser.parse()?;
         let mut anal = Analyser::new();
-        let (term, _) = anal.typecheck(&sterm)?;
+        let (term, _) = anal.typecheck(&sterm, Ctx::new())?;
 
         let fv = term.free_vars();
         assert!(fv.is_empty());
@@ -1063,7 +1168,7 @@ mod test {
 
             let fv2 = t2.free_vars();
             assert_eq!(fv2.len(), 1);
-            assert!(fv2.iter().any(|v| v.name == "f"));
+            assert!(fv2.iter().any(|v| v.name() == "f"));
         } else {
             panic!("term must be a 'let'");
         }

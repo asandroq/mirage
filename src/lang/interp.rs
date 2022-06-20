@@ -1,21 +1,18 @@
-use super::{parser::Ast, Analyser, Term, Type};
+use super::{Analyser, Ctx, Term, Type};
 use crate::{
     collections::{nonemptyvec::NonEmptyVec, sharedlist::SharedList},
     error::{Error, Result},
     lang::{
         parser::{Parser, ParserCtx},
-        Env, TermKind, Variable,
+        Env, Module, TermKind, Variable,
     },
 };
-use std::{
-    collections::{hash_map::Entry, HashMap, VecDeque},
-    rc::Rc,
-};
+use std::{collections::VecDeque, rc::Rc};
 
 #[derive(Debug)]
 pub struct Interpreter {
-    /// Global namespace.
-    globals: HashMap<String, (Rc<Term>, Type)>,
+    /// Loaded modules.
+    modules: Vec<Module>,
 
     /// Persistent parser context.
     parser_ctx: ParserCtx,
@@ -24,42 +21,18 @@ pub struct Interpreter {
 impl Interpreter {
     pub fn new() -> Self {
         Interpreter {
-            globals: HashMap::new(),
+            modules: Vec::new(),
             parser_ctx: ParserCtx::new(),
         }
     }
 
     pub fn load_prelude(&mut self) -> Result<()> {
         let mut parser = Parser::new(&mut self.parser_ctx, PRELUDE.chars(), "prelude".to_string());
-        let module = parser.parse_module()?;
-        let mut anal = Analyser::new();
-        for (vars, ast) in module.decls {
-            self.load_decl(&mut anal, vars, &ast)?;
-        }
+        let src = parser.parse_module()?;
+        let module = Module::load(&src)?;
+        self.modules.push(module);
 
         Ok(())
-    }
-
-    fn load_decl(
-        &mut self,
-        anal: &mut Analyser,
-        vars: NonEmptyVec<String>,
-        ast: &Ast,
-    ) -> Result<()> {
-        let (var, mut rest) = vars.into_parts();
-        if let Entry::Vacant(e) = self.globals.entry(var.clone()) {
-            let (term, ttype) = if let Some(lvar) = rest.next() {
-                let mut lvars = NonEmptyVec::new(lvar);
-                lvars.extend(rest);
-                anal.typecheck_lambda(&lvars, ast)?
-            } else {
-                anal.typecheck(ast)?
-            };
-            e.insert((term, ttype));
-            Ok(())
-        } else {
-            Err(Error::DuplicateGlobal(var))
-        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -69,12 +42,7 @@ impl Interpreter {
                 Ok(Rc::clone(term))
             }
             TermKind::Var(v) => {
-                let fix_or_val = lookup(v, env).or_else(|_| {
-                    self.globals
-                        .get(&v.name)
-                        .map(|(term, _)| Rc::clone(term))
-                        .ok_or_else(|| Error::RuntimeError(format!("Variable {v} not found")))
-                })?;
+                let fix_or_val = lookup(v, env)?;
                 if let Term {
                     kind: TermKind::Fix(..),
                 } = fix_or_val.as_ref()
@@ -232,10 +200,31 @@ impl Interpreter {
     pub fn eval(&mut self, input: &str, input_ctx: String) -> Result<(Term, Type)> {
         let mut parser = Parser::new(&mut self.parser_ctx, input.chars(), input_ctx);
         let sterm = parser.parse()?;
+        let (env, ctx) = self.extract();
         let mut anal = Analyser::new();
-        let (term, ttype) = anal.typecheck(&sterm)?;
-        let val = self.eval_term(&term, &SharedList::nil())?;
+        let (term, ttype) = anal.typecheck(&sterm, ctx)?;
+        let val = self.eval_term(&term, &env)?;
         Ok((val.as_ref().clone(), ttype))
+    }
+
+    fn extract(&self) -> (Env, Ctx) {
+        let mut env = SharedList::nil();
+        let mut ctx = Ctx::new();
+
+        for module in &self.modules {
+            let mut iter = module.items.iter();
+            if let Some((var, entry)) = iter.next() {
+                env = env.cons((var.clone(), entry.term.clone()));
+                let mut rib = NonEmptyVec::new((var.clone(), entry.tscm.clone()));
+                for (var, entry) in iter {
+                    env = env.cons((var.clone(), entry.term.clone()));
+                    rib.push((var.clone(), entry.tscm.clone()));
+                }
+                ctx.extend(rib);
+            }
+        }
+
+        (env, ctx)
     }
 }
 

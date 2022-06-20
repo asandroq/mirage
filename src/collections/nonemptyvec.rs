@@ -136,9 +136,7 @@ impl<'a, T: 'a> IntoIterator for &'a NonEmptyVec<T> {
 
 impl<T> Extend<T> for NonEmptyVec<T> {
     fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
-        for i in iter {
-            self.push(i);
-        }
+        self.rest.extend(iter);
     }
 }
 

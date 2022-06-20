@@ -1,3 +1,4 @@
+#![deny(clippy::pedantic)]
 #![allow(clippy::similar_names)]
 
 mod collections;
