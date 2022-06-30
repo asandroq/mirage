@@ -8,7 +8,7 @@ use crate::{
     collections::{nonemptyvec::NonEmptyVec, sharedlist::SharedList},
     error::{Error, Result},
 };
-use ast::Ast;
+use ast::{Ast, AstKind};
 use std::{
     borrow::Cow,
     collections::{hash_map::Entry, HashMap, HashSet, VecDeque},
@@ -669,8 +669,8 @@ impl Analyser {
 
     #[allow(clippy::too_many_lines)]
     fn convert_ast(&mut self, ast: &Ast, ctx: Ctx) -> Result<Typing> {
-        match ast {
-            Ast::Unit => Ok((
+        match &ast.ast {
+            AstKind::Unit => Ok((
                 ctx,
                 Rc::new(Term {
                     kind: TermKind::Unit,
@@ -678,7 +678,7 @@ impl Analyser {
                 Type::Unit,
                 ConstrSet::new(),
             )),
-            Ast::Bool(b) => Ok((
+            AstKind::Bool(b) => Ok((
                 ctx,
                 Rc::new(Term {
                     kind: TermKind::Bool(*b),
@@ -686,7 +686,7 @@ impl Analyser {
                 Type::Bool,
                 ConstrSet::new(),
             )),
-            Ast::Int(i) => Ok((
+            AstKind::Int(i) => Ok((
                 ctx,
                 Rc::new(Term {
                     kind: TermKind::Int(*i),
@@ -694,7 +694,7 @@ impl Analyser {
                 Type::Int,
                 ConstrSet::new(),
             )),
-            Ast::Var(n) => {
+            AstKind::Var(n) => {
                 let (var, ts) = ctx.find(|v| v.name() == *n).cloned().ok_or_else(|| {
                     Error::VariableNotFound(format!("Variable '{n}' was not found in context"))
                 })?;
@@ -716,11 +716,11 @@ impl Analyser {
                     ConstrSet::new(),
                 ))
             }
-            Ast::Lam(ast::Lambda { vars, body }) => {
+            AstKind::Lam(ast::Lambda { vars, body }) => {
                 let vars = vars.as_ref().map(Variable::local);
                 self.convert_lambda(vars, body, ctx)
             }
-            Ast::App(ast::App { oper, args }) => {
+            AstKind::App(ast::App { oper, args }) => {
                 let (ctx, t1, ty1, cs1) = self.convert_ast(oper, ctx)?;
 
                 let (s2, ss) = args.parts();
@@ -762,7 +762,7 @@ impl Analyser {
                     cs,
                 ))
             }
-            Ast::If(ast::If {
+            AstKind::If(ast::If {
                 cond,
                 conseq,
                 alter,
@@ -789,7 +789,7 @@ impl Analyser {
                     cs,
                 ))
             }
-            Ast::Let(ast::Let { vars, expr, body }) => {
+            AstKind::Let(ast::Let { vars, expr, body }) => {
                 let vars = vars.as_ref().map(Variable::local);
                 let (var, mut rest) = vars.into_parts();
 
@@ -831,7 +831,7 @@ impl Analyser {
                     cs,
                 ))
             }
-            Ast::Letrec(ast::Letrec {
+            AstKind::Letrec(ast::Letrec {
                 var,
                 vty,
                 expr,
@@ -869,7 +869,7 @@ impl Analyser {
                     cs,
                 ))
             }
-            Ast::Tuple(ast::Tuple { fst, snd, rest }) => {
+            AstKind::Tuple(ast::Tuple { fst, snd, rest }) => {
                 let (ctx, t1, ty1, cs1) = self.convert_ast(fst, ctx)?;
                 let (ctx, t2, ty2, cs2) = self.convert_ast(snd, ctx)?;
 
@@ -896,7 +896,7 @@ impl Analyser {
                     css,
                 ))
             }
-            Ast::TupleRef(ast::TupleRef { index, tuple }) => {
+            AstKind::TupleRef(ast::TupleRef { index, tuple }) => {
                 let (ctx, t, ty, mut cs) = self.convert_ast(tuple, ctx)?;
 
                 // create principal tuple type, the size of the
@@ -933,7 +933,7 @@ impl Analyser {
                     cs,
                 ))
             }
-            Ast::BinOp(ast::BinOp { oper, lhs, rhs }) => {
+            AstKind::BinOp(ast::BinOp { oper, lhs, rhs }) => {
                 let (ctx, t1, ty1, cs1) = self.convert_ast(lhs, ctx)?;
                 let (ctx, t2, ty2, cs2) = self.convert_ast(rhs, ctx)?;
 

@@ -1,9 +1,87 @@
 use crate::collections::nonemptyvec::NonEmptyVec;
 use std::fmt;
 
+pub(crate) fn new_app(oper: Ast, args: NonEmptyVec<Ast>) -> AstBuilder {
+    AstBuilder::new(AstKind::App(App::new(oper, args)))
+}
+
+pub(crate) fn new_binop(oper: String, lhs: Ast, rhs: Ast) -> AstBuilder {
+    AstBuilder::new(AstKind::BinOp(BinOp::new(oper, lhs, rhs)))
+}
+
+pub(crate) fn new_bool(val: bool) -> AstBuilder {
+    AstBuilder::new(AstKind::Bool(val))
+}
+
+pub(crate) fn new_if(cond: Ast, conseq: Ast, alter: Ast) -> AstBuilder {
+    AstBuilder::new(AstKind::If(If::new(cond, conseq, alter)))
+}
+
+pub(crate) fn new_int(val: i64) -> AstBuilder {
+    AstBuilder::new(AstKind::Int(val))
+}
+
+pub(crate) fn new_lambda(vars: NonEmptyVec<String>, body: Ast) -> AstBuilder {
+    AstBuilder::new(AstKind::Lam(Lambda::new(vars, body)))
+}
+
+pub(crate) fn new_let(vars: NonEmptyVec<String>, expr: Ast, body: Ast) -> AstBuilder {
+    AstBuilder::new(AstKind::Let(Let::new(vars, expr, body)))
+}
+
+pub(crate) fn new_letrec(var: String, vty: Option<Type>, expr: Ast, body: Ast) -> AstBuilder {
+    AstBuilder::new(AstKind::Letrec(Letrec::new(var, vty, expr, body)))
+}
+
+pub(crate) fn new_tuple(fst: Ast, snd: Ast, rest: Vec<Ast>) -> AstBuilder {
+    AstBuilder::new(AstKind::Tuple(Tuple::new(fst, snd, rest)))
+}
+
+pub(crate) fn new_tupleref(index: usize, tuple: Ast) -> AstBuilder {
+    AstBuilder::new(AstKind::TupleRef(TupleRef::new(index, tuple)))
+}
+
+pub(crate) fn new_unit() -> AstBuilder {
+    AstBuilder::new(AstKind::Unit)
+}
+
+pub(crate) fn new_var(var: String) -> AstBuilder {
+    AstBuilder::new(AstKind::Var(var))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct Ast {
+    pub ast: AstKind,
+    pub span: Span,
+}
+
+impl fmt::Display for Ast {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.ast.fmt(f)
+    }
+}
+
+pub(crate) struct AstBuilder {
+    ast: AstKind,
+}
+
+impl AstBuilder {
+    pub(crate) fn new(ast: AstKind) -> Self {
+        Self { ast }
+    }
+
+    pub(crate) fn with_span(self, begin: Position, end: Position) -> Ast {
+        let span = Span { begin, end };
+        Ast {
+            ast: self.ast,
+            span,
+        }
+    }
+}
+
 /// Abstract syntax tree.
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) enum Ast {
+pub(crate) enum AstKind {
     /// ()
     Unit,
 
@@ -41,7 +119,7 @@ pub(crate) enum Ast {
     BinOp(BinOp),
 }
 
-impl fmt::Display for Ast {
+impl fmt::Display for AstKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unit => write!(f, "()"),
@@ -316,4 +394,17 @@ impl fmt::Display for Type {
             }
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Span {
+    pub begin: Position,
+    pub end: Position,
+}
+
+/// Position of the lexer in the input stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Position {
+    pub column: usize,
+    pub row: usize,
 }
