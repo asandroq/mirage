@@ -1,6 +1,9 @@
 //! Parser for the Mirage language.
 
-use crate::collections::nonemptyvec::NonEmptyVec;
+use crate::{
+    collections::nonemptyvec::NonEmptyVec,
+    lang::ast::{self, Ast, Type},
+};
 use std::fmt;
 
 /// Position of the lexer in the input stream.
@@ -412,147 +415,6 @@ impl<I: Iterator<Item = char>> Lexer<I> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Type {
-    Unit,
-    Ident(String),
-    Func(Box<Type>, Box<Type>),
-    Tuple(Box<Type>, Box<Type>, Vec<Type>),
-}
-
-impl fmt::Display for Type {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Type::Unit => write!(f, "()"),
-            Type::Ident(ty) => write!(f, "{}", ty),
-            Type::Func(ty1, ty2) => write!(f, "{} → {}", ty1, ty2),
-            Type::Tuple(fst, snd, rest) => {
-                write!(f, "({}, {}", fst, snd)?;
-                for t in rest {
-                    write!(f, ", {}", t)?;
-                }
-                write!(f, ")")
-            }
-        }
-    }
-}
-
-/// Abstract syntax tree.
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum Ast {
-    /// ()
-    Unit,
-
-    /// Boolean, `true` or `false`
-    Bool(bool),
-
-    /// Signed integers.
-    Int(i64),
-
-    /// Variables.
-    Var(String),
-
-    /// Lambda abstractions.
-    ///
-    /// It's comprised of variable bindings and a body.
-    Lam(NonEmptyVec<String>, Box<Ast>),
-
-    /// Abstraction application.
-    ///
-    /// It's comprised of an operator and operands.
-    App(Box<Ast>, NonEmptyVec<Ast>),
-
-    /// Conditional expression.
-    ///
-    /// It's comprised of a test and two branches.
-    If(Box<Ast>, Box<Ast>, Box<Ast>),
-
-    /// Let bindings.
-    ///
-    /// It binds a variable to an expression inside its body. If more
-    /// than one identifier is given, then the expression is assumed
-    /// to be the body of a lambda abstraction and the other
-    /// identifiers are its arguments.
-    Let(NonEmptyVec<String>, Box<Ast>, Box<Ast>),
-
-    /// Letrec bindings.
-    ///
-    /// Similar to `Let`, but the variable is also in scope inside the
-    /// expression that gives its own value.
-    Letrec(String, Option<Type>, Box<Ast>, Box<Ast>),
-
-    /// Heterogeneous collection of values.
-    ///
-    /// It's comprised of the first and second values, alonside a
-    /// possibly empty rest of values.
-    Tuple(Box<Ast>, Box<Ast>, Vec<Ast>),
-
-    /// Selector of a value inside a tuple.
-    ///
-    /// It's comprised of an index and an expression that must
-    /// evaluate to a tuple.
-    TupleRef(usize, Box<Ast>),
-
-    /// Binary infix operator.
-    ///
-    /// It's comprised of the operator alongside the left- and
-    /// right-hand sides.
-    BinOp(String, Box<Ast>, Box<Ast>),
-}
-
-impl fmt::Display for Ast {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unit => write!(f, "()"),
-            Self::Bool(b) => write!(f, "{b}"),
-            Self::Int(i) => write!(f, "{i}"),
-            Self::Var(v) => write!(f, "{v}"),
-            Self::Lam(vs, body) => {
-                let (v, vs) = vs.parts();
-                write!(f, "λ{v}")?;
-                for v in vs {
-                    write!(f, " {v}")?;
-                }
-                write!(f, ". {body}")
-            }
-            Self::App(rator, rands) => {
-                write!(f, "({rator}")?;
-                for rand in rands {
-                    write!(f, " {rand}")?;
-                }
-                write!(f, ")")
-            }
-            Self::If(test, consequent, alternative) => {
-                write!(f, "if {test} then {consequent} else {alternative}")
-            }
-            Self::Let(vs, expr, body) => {
-                let (v, vs) = vs.parts();
-                write!(f, "let {v}")?;
-                for v in vs {
-                    write!(f, " {v}")?;
-                }
-                write!(f, " = {expr} in {body}")
-            }
-            Self::Letrec(v, ttype, expr, body) => {
-                if let Some(ttype) = ttype {
-                    write!(f, "letrec {v} : {ttype} = {expr} in {body}")
-                } else {
-                    write!(f, "letrec {v} = {expr} in {body}")
-                }
-            }
-            Self::Tuple(fst, snd, rest) => {
-                write!(f, "({fst}, {snd}")?;
-                for t in rest {
-                    write!(f, ", {t}")?;
-                }
-                write!(f, ")")
-            }
-            Self::TupleRef(i, tuple) => write!(f, "#{i}({tuple})"),
-            Self::BinOp(op, lhs, rhs) => write!(f, "{lhs} {op} {rhs}"),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub(crate) struct Module {
     pub(crate) decls: Vec<(NonEmptyVec<String>, Ast)>,
@@ -718,7 +580,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         self.consume_token(Token::Else)?;
         let term3 = self.parse_term()?;
 
-        Ok(Ast::If(Box::new(term1), Box::new(term2), Box::new(term3)))
+        Ok(Ast::If(ast::If::new(term1, term2, term3)))
     }
 
     // lambda : '\' ident (... ident)* '=>' term
@@ -728,7 +590,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         self.consume_token(Token::ThickArrow)?;
         let term = self.parse_term()?;
 
-        Ok(Ast::Lam(vars, Box::new(term)))
+        Ok(Ast::Lam(ast::Lambda::new(vars, term)))
     }
 
     // let : LET ident (... ident)* = term IN term
@@ -740,7 +602,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         self.consume_token(Token::In)?;
         let term2 = self.parse_term()?;
 
-        Ok(Ast::Let(vars, Box::new(term1), Box::new(term2)))
+        Ok(Ast::Let(ast::Let::new(vars, term1, term2)))
     }
 
     // letrec : LETREC ident : type = term IN term
@@ -760,7 +622,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         self.consume_token(Token::In)?;
         let term2 = self.parse_term()?;
 
-        Ok(Ast::Letrec(var, vty, Box::new(term1), Box::new(term2)))
+        Ok(Ast::Letrec(ast::Letrec::new(var, vty, term1, term2)))
     }
 
     // atom_seq : atom (atom ...)?
@@ -776,7 +638,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 atoms.push(a);
                 tok = self.peek_token()?;
             }
-            Ok(Ast::App(Box::new(left), atoms))
+            Ok(Ast::App(ast::App::new(left, atoms)))
         } else {
             Ok(left)
         }
@@ -818,7 +680,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             self.consume_operator()?;
 
             let rhs = self.parse_atom_expr(next_min_prec)?;
-            if let Ast::BinOp(op2, _, _) = &rhs {
+            if let Ast::BinOp(ast::BinOp { oper: op2, .. }) = &rhs {
                 if op == *op2 && info.assoc == OpAssoc::None {
                     return Err(self.err(
                         ErrorKind::OperatorAssoc,
@@ -827,7 +689,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 }
             }
 
-            lhs = Ast::BinOp(op, Box::new(lhs), Box::new(rhs));
+            lhs = Ast::BinOp(ast::BinOp::new(op, lhs, rhs));
         }
 
         Ok(lhs)
@@ -895,7 +757,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                         match self.peek_token()? {
                             Token::RParen => {
                                 self.consume_token(Token::RParen)?;
-                                return Ok(Ast::Tuple(Box::new(fst), Box::new(snd), rest));
+                                return Ok(Ast::Tuple(ast::Tuple::new(fst, snd, rest)));
                             }
                             Token::Comma => {
                                 self.consume_token(Token::Comma)?;
@@ -927,19 +789,19 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             }
             Token::Pound => {
                 self.next_token()?;
-                let i = self.consume_integer()?;
-                if i >= 0 {
+                let index = self.consume_integer()?;
+                if index >= 0 {
                     self.consume_token(Token::LParen)?;
-                    let t = self.parse_term()?;
+                    let tuple = self.parse_term()?;
                     self.consume_token(Token::RParen)?;
 
                     #[allow(clippy::cast_possible_truncation)]
                     #[allow(clippy::cast_sign_loss)]
-                    Ok(Ast::TupleRef(i as usize, Box::new(t)))
+                    Ok(Ast::TupleRef(ast::TupleRef::new(index as usize, tuple)))
                 } else {
                     Err(self.err(
                         ErrorKind::UnexpectedToken,
-                        format!("tuple accessor must be non-negative, but {} found", i),
+                        format!("tuple accessor must be non-negative, but got {index} found"),
                     ))
                 }
             }

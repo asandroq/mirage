@@ -1,5 +1,6 @@
 //! Mirage's built-in programming language.
 
+pub mod ast;
 pub mod interp;
 pub mod parser;
 
@@ -7,7 +8,7 @@ use crate::{
     collections::{nonemptyvec::NonEmptyVec, sharedlist::SharedList},
     error::{Error, Result},
 };
-use parser::Ast;
+use ast::Ast;
 use std::{
     borrow::Cow,
     collections::{hash_map::Entry, HashMap, HashSet, VecDeque},
@@ -640,19 +641,19 @@ impl Analyser {
     }
 
     /// Converts type parse trees into actual types.
-    fn analyse_type(src: &parser::Type) -> Result<Type> {
+    fn analyse_type(src: &ast::Type) -> Result<Type> {
         match src {
-            parser::Type::Unit => Ok(Type::Unit),
-            parser::Type::Ident(ident) => match ident.as_ref() {
+            ast::Type::Unit => Ok(Type::Unit),
+            ast::Type::Ident(ident) => match ident.as_ref() {
                 "Bool" => Ok(Type::Bool),
                 "Int" => Ok(Type::Int),
                 _ => Err(Error::TypeMismatch(format!("Unknown type {}", ident))),
             },
-            parser::Type::Func(ty1, ty2) => Ok(Type::Func(
+            ast::Type::Func(ty1, ty2) => Ok(Type::Func(
                 Box::new(Analyser::analyse_type(ty1)?),
                 Box::new(Analyser::analyse_type(ty2)?),
             )),
-            parser::Type::Tuple(fst, snd, rest) => Ok(Type::Tuple(
+            ast::Type::Tuple(fst, snd, rest) => Ok(Type::Tuple(
                 Box::new(Analyser::analyse_type(fst)?),
                 Box::new(Analyser::analyse_type(snd)?),
                 rest.iter()
@@ -715,14 +716,14 @@ impl Analyser {
                     ConstrSet::new(),
                 ))
             }
-            Ast::Lam(vars, body) => {
+            Ast::Lam(ast::Lambda { vars, body }) => {
                 let vars = vars.as_ref().map(Variable::local);
                 self.convert_lambda(vars, body, ctx)
             }
-            Ast::App(s1, ss) => {
-                let (ctx, t1, ty1, cs1) = self.convert_ast(s1, ctx)?;
+            Ast::App(ast::App { oper, args }) => {
+                let (ctx, t1, ty1, cs1) = self.convert_ast(oper, ctx)?;
 
-                let (s2, ss) = ss.parts();
+                let (s2, ss) = args.parts();
                 let (ctx, t2, ty2, cs2) = self.convert_ast(s2, ctx)?;
 
                 let mut ts = NonEmptyVec::new(t2);
@@ -761,10 +762,14 @@ impl Analyser {
                     cs,
                 ))
             }
-            Ast::If(s1, s2, s3) => {
-                let (ctx, t1, ty1, cs1) = self.convert_ast(s1, ctx)?;
-                let (ctx, t2, ty2, cs2) = self.convert_ast(s2, ctx)?;
-                let (ctx, t3, ty3, cs3) = self.convert_ast(s3, ctx)?;
+            Ast::If(ast::If {
+                cond,
+                conseq,
+                alter,
+            }) => {
+                let (ctx, t1, ty1, cs1) = self.convert_ast(cond, ctx)?;
+                let (ctx, t2, ty2, cs2) = self.convert_ast(conseq, ctx)?;
+                let (ctx, t3, ty3, cs3) = self.convert_ast(alter, ctx)?;
 
                 let mut cs = ConstrSet::new();
                 cs.append(cs1);
@@ -784,8 +789,8 @@ impl Analyser {
                     cs,
                 ))
             }
-            Ast::Let(idents, expr, body) => {
-                let vars = idents.as_ref().map(Variable::local);
+            Ast::Let(ast::Let { vars, expr, body }) => {
+                let vars = vars.as_ref().map(Variable::local);
                 let (var, mut rest) = vars.into_parts();
 
                 // handle the case where the `let` expression is a lambda abstraction
@@ -826,9 +831,14 @@ impl Analyser {
                     cs,
                 ))
             }
-            Ast::Letrec(v, otype, expr, body) => {
-                let var = Variable::local(v);
-                let var_type = otype.as_ref().map_or(
+            Ast::Letrec(ast::Letrec {
+                var,
+                vty,
+                expr,
+                body,
+            }) => {
+                let var = Variable::local(var);
+                let var_type = vty.as_ref().map_or(
                     Ok(Type::Var(Variable::local("FIX"))),
                     Analyser::analyse_type,
                 )?;
@@ -859,7 +869,7 @@ impl Analyser {
                     cs,
                 ))
             }
-            Ast::Tuple(fst, snd, rest) => {
+            Ast::Tuple(ast::Tuple { fst, snd, rest }) => {
                 let (ctx, t1, ty1, cs1) = self.convert_ast(fst, ctx)?;
                 let (ctx, t2, ty2, cs2) = self.convert_ast(snd, ctx)?;
 
@@ -886,23 +896,23 @@ impl Analyser {
                     css,
                 ))
             }
-            Ast::TupleRef(i, t) => {
-                let (ctx, t, ty, mut cs) = self.convert_ast(t, ctx)?;
+            Ast::TupleRef(ast::TupleRef { index, tuple }) => {
+                let (ctx, t, ty, mut cs) = self.convert_ast(tuple, ctx)?;
 
                 // create principal tuple type, the size of the
                 // rest vector is just the smallest size that will
                 // typecheck
                 let fst = Type::Var(Variable::local("T"));
                 let snd = Type::Var(Variable::local("T"));
-                let len = (i + 1).saturating_sub(2);
+                let len = (index + 1).saturating_sub(2);
                 let mut rest = Vec::with_capacity(len);
                 for _ in 0..len {
                     rest.push(Type::Var(Variable::local("T")));
                 }
 
-                let ttype = if *i == 0 {
+                let ttype = if *index == 0 {
                     fst.clone()
-                } else if *i == 1 {
+                } else if *index == 1 {
                     snd.clone()
                 } else {
                     // unwrap is safe because i > 1, so rest is not empty
@@ -917,22 +927,22 @@ impl Analyser {
                 Ok((
                     ctx.apply_subst(&subst),
                     Rc::new(Term {
-                        kind: TermKind::TupleRef(*i, t),
+                        kind: TermKind::TupleRef(*index, t),
                     }),
                     ttype.apply(&subst),
                     cs,
                 ))
             }
-            Ast::BinOp(op, s1, s2) => {
-                let (ctx, t1, ty1, cs1) = self.convert_ast(s1, ctx)?;
-                let (ctx, t2, ty2, cs2) = self.convert_ast(s2, ctx)?;
+            Ast::BinOp(ast::BinOp { oper, lhs, rhs }) => {
+                let (ctx, t1, ty1, cs1) = self.convert_ast(lhs, ctx)?;
+                let (ctx, t2, ty2, cs2) = self.convert_ast(rhs, ctx)?;
 
                 let info = self
                     .oper_table
                     .iter()
-                    .find(|(o, _)| o == op)
+                    .find(|(o, _)| o == oper)
                     .map(|(_, i)| i.clone())
-                    .ok_or_else(|| Error::UnknownOperator(format!("Operator {} not found", op)))?;
+                    .ok_or_else(|| Error::UnknownOperator(format!("Operator {oper} not found")))?;
 
                 let mut cs = ConstrSet::new();
                 cs.append(cs1);
@@ -945,7 +955,7 @@ impl Analyser {
                 Ok((
                     ctx.apply_subst(&subst),
                     Rc::new(Term {
-                        kind: TermKind::BinOp(op.clone(), t1, t2),
+                        kind: TermKind::BinOp(oper.clone(), t1, t2),
                     }),
                     info.ttype,
                     cs,
