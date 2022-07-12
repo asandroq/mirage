@@ -463,6 +463,9 @@ pub struct Parser<'ctx, I: Iterator<Item = char>> {
     /// Look-ahead token in the input stream.
     la: Option<Token>,
 
+    /// Current position in the input stream.
+    position: Position,
+
     /// Stream of tokens coming from the lexer.
     tokens: Lexer<I>,
 }
@@ -472,6 +475,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         Parser {
             ctx,
             la: None,
+            position: Position { column: 0, row: 1 },
             tokens: Lexer::new(input, input_ctx),
         }
     }
@@ -480,7 +484,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         Error {
             kind,
             context: self.tokens.context.clone(),
-            position: self.tokens.position,
+            position: self.position,
             msg: msg.into(),
         }
     }
@@ -496,6 +500,8 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
 
     fn next_token(&mut self) -> Result<Token> {
         self.fill()?;
+        self.position = self.tokens.position;
+
         self.la
             .take()
             .ok_or_else(|| self.err(ErrorKind::PrematureEnd, "premature end of input"))
@@ -561,47 +567,47 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
 
     // if : IF term THEN term ELSE term
     fn parse_if(&mut self) -> Result<Ast> {
-        let begin = self.tokens.position;
+        let begin = self.position;
         self.consume_token(Token::If)?;
         let term1 = self.parse_term()?;
         self.consume_token(Token::Then)?;
         let term2 = self.parse_term()?;
         self.consume_token(Token::Else)?;
         let term3 = self.parse_term()?;
-        let end = self.tokens.position;
+        let end = self.position;
 
         Ok(ast::new_if(term1, term2, term3).with_span(begin, end))
     }
 
     // lambda : '\' ident (... ident)* '=>' term
     fn parse_lambda(&mut self) -> Result<Ast> {
-        let begin = self.tokens.position;
+        let begin = self.position;
         self.consume_token(Token::Backslash)?;
         let vars = self.parse_unique_identifiers()?;
         self.consume_token(Token::ThickArrow)?;
         let term = self.parse_term()?;
-        let end = self.tokens.position;
+        let end = self.position;
 
         Ok(ast::new_lambda(vars, term).with_span(begin, end))
     }
 
     // let : LET ident (... ident)* = term IN term
     fn parse_let(&mut self) -> Result<Ast> {
-        let begin = self.tokens.position;
+        let begin = self.position;
         self.consume_token(Token::Let)?;
         let vars = self.parse_unique_identifiers()?;
         self.consume_token(Token::Equals)?;
         let term1 = self.parse_term()?;
         self.consume_token(Token::In)?;
         let term2 = self.parse_term()?;
-        let end = self.tokens.position;
+        let end = self.position;
 
         Ok(ast::new_let(vars, term1, term2).with_span(begin, end))
     }
 
     // letrec : LETREC ident : type = term IN term
     fn parse_letrec(&mut self) -> Result<Ast> {
-        let begin = self.tokens.position;
+        let begin = self.position;
         self.consume_token(Token::Letrec)?;
         let var = self.consume_identifier()?;
 
@@ -616,14 +622,14 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         let term1 = self.parse_term()?;
         self.consume_token(Token::In)?;
         let term2 = self.parse_term()?;
-        let end = self.tokens.position;
+        let end = self.position;
 
         Ok(ast::new_letrec(var, vty, term1, term2).with_span(begin, end))
     }
 
     // atom_seq : atom (atom ...)?
     fn parse_atom_seq(&mut self) -> Result<Ast> {
-        let begin = self.tokens.position;
+        let begin = self.position;
         let left = self.parse_atom()?;
         let mut tok = self.peek_token()?;
         if tok.starts_atom() {
@@ -635,7 +641,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 atoms.push(a);
                 tok = self.peek_token()?;
             }
-            let end = self.tokens.position;
+            let end = self.position;
 
             Ok(ast::new_app(left, atoms).with_span(begin, end))
         } else {
@@ -653,7 +659,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         let mut lhs = self.parse_atom_seq()?;
 
         while let Token::Op(op) = self.peek_token()? {
-            let begin = self.tokens.position;
+            let begin = self.position;
             let info = self
                 .ctx
                 .table
@@ -692,7 +698,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                     ));
                 }
             }
-            let end = self.tokens.position;
+            let end = self.position;
 
             lhs = ast::new_binop(op, lhs, rhs).with_span(begin, end);
         }
@@ -730,16 +736,16 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
     fn parse_atom(&mut self) -> Result<Ast> {
         match self.peek_token()? {
             Token::Bool(b) => {
-                let begin = self.tokens.position;
+                let begin = self.position;
                 self.next_token()?;
-                let end = self.tokens.position;
+                let end = self.position;
 
                 Ok(ast::new_bool(b).with_span(begin, end))
             }
             Token::Ident(ident) => {
-                let begin = self.tokens.position;
+                let begin = self.position;
                 self.next_token()?;
-                let end = self.tokens.position;
+                let end = self.position;
 
                 if ident.starts_with('_') {
                     Err(self.err(
@@ -753,7 +759,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 }
             }
             Token::LParen => {
-                let begin = self.tokens.position;
+                let begin = self.position;
                 self.next_token()?;
                 let fst = self.parse_term()?;
                 let tok = self.peek_token()?;
@@ -768,7 +774,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                         match self.peek_token()? {
                             Token::RParen => {
                                 self.consume_token(Token::RParen)?;
-                                let end = self.tokens.position;
+                                let end = self.position;
                                 return Ok(ast::new_tuple(fst, snd, rest).with_span(begin, end));
                             }
                             Token::Comma => {
@@ -792,28 +798,28 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 }
             }
             Token::Unit => {
-                let begin = self.tokens.position;
+                let begin = self.position;
                 self.next_token()?;
-                let end = self.tokens.position;
+                let end = self.position;
 
                 Ok(ast::new_unit().with_span(begin, end))
             }
             Token::Int(i) => {
-                let begin = self.tokens.position;
+                let begin = self.position;
                 self.next_token()?;
-                let end = self.tokens.position;
+                let end = self.position;
 
                 Ok(ast::new_int(i).with_span(begin, end))
             }
             Token::Pound => {
-                let begin = self.tokens.position;
+                let begin = self.position;
                 self.next_token()?;
                 let index = self.consume_integer()?;
                 if index >= 0 {
                     self.consume_token(Token::LParen)?;
                     let tuple = self.parse_term()?;
                     self.consume_token(Token::RParen)?;
-                    let end = self.tokens.position;
+                    let end = self.position;
 
                     #[allow(clippy::cast_possible_truncation)]
                     #[allow(clippy::cast_sign_loss)]
