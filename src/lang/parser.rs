@@ -4,7 +4,7 @@ use crate::{
     collections::nonemptyvec::NonEmptyVec,
     lang::ast::{self, Ast, AstKind, Position, Type},
 };
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ErrorKind {
@@ -23,7 +23,7 @@ pub struct Error {
     kind: ErrorKind,
     context: String,
     position: Position,
-    msg: String,
+    msg: Cow<'static, str>,
 }
 
 impl fmt::Display for Error {
@@ -160,12 +160,12 @@ impl<I: Iterator<Item = char>> Lexer<I> {
         }
     }
 
-    fn err(&self, kind: ErrorKind, msg: String) -> Error {
+    fn err<S: Into<Cow<'static, str>>>(&self, kind: ErrorKind, msg: S) -> Error {
         Error {
             kind,
             context: self.context.clone(),
             position: self.position,
-            msg,
+            msg: msg.into(),
         }
     }
 
@@ -214,7 +214,7 @@ impl<I: Iterator<Item = char>> Lexer<I> {
         } else {
             Err(self.err(
                 ErrorKind::MalformedToken,
-                format!("cannot parse {} as a name", res),
+                format!("cannot parse {res} as a name"),
             ))
         }
     }
@@ -237,7 +237,7 @@ impl<I: Iterator<Item = char>> Lexer<I> {
         s.parse().map_err(|err| {
             self.err(
                 ErrorKind::MalformedToken,
-                format!("cannot parse {} as integer: {}", s, err),
+                format!("cannot parse {s} as integer: {err}"),
             )
         })
     }
@@ -398,7 +398,7 @@ impl<I: Iterator<Item = char>> Lexer<I> {
                 c => {
                     return Err(self.err(
                         ErrorKind::UnrecognisedCharacter,
-                        format!("unrecognised character {}", c),
+                        format!("unrecognised character {c}"),
                     ))
                 }
             }
@@ -476,12 +476,12 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         }
     }
 
-    fn err(&self, kind: ErrorKind, msg: String) -> Error {
+    fn err<S: Into<Cow<'static, str>>>(&self, kind: ErrorKind, msg: S) -> Error {
         Error {
             kind,
             context: self.tokens.context.clone(),
             position: self.tokens.position,
-            msg,
+            msg: msg.into(),
         }
     }
 
@@ -496,23 +496,18 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
 
     fn next_token(&mut self) -> Result<Token> {
         self.fill()?;
-        self.la.take().ok_or_else(|| {
-            self.err(
-                ErrorKind::PrematureEnd,
-                "premature end of input".to_string(),
-            )
-        })
+        self.la
+            .take()
+            .ok_or_else(|| self.err(ErrorKind::PrematureEnd, "premature end of input"))
     }
 
     fn peek_token(&mut self) -> Result<Token> {
         self.fill()?;
 
-        self.la.as_ref().cloned().ok_or_else(|| {
-            self.err(
-                ErrorKind::PrematureEnd,
-                "unexpected end of input".to_string(),
-            )
-        })
+        self.la
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| self.err(ErrorKind::PrematureEnd, "unexpected end of input"))
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -523,7 +518,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         } else {
             Err(self.err(
                 ErrorKind::UnexpectedToken,
-                format!("expected {}, but found {} instead", tok, t),
+                format!("expected {tok}, but got {t} instead"),
             ))
         }
     }
@@ -535,7 +530,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         } else {
             Err(self.err(
                 ErrorKind::UnexpectedToken,
-                format!("identifier expected, but found {} instead", t),
+                format!("identifier expected, but got {t} instead"),
             ))
         }
     }
@@ -547,7 +542,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         } else {
             Err(self.err(
                 ErrorKind::UnexpectedToken,
-                format!("integer expected, but found {} instead", t),
+                format!("integer expected, but got {t} instead"),
             ))
         }
     }
@@ -559,7 +554,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         } else {
             Err(self.err(
                 ErrorKind::UnexpectedToken,
-                format!("operator expected, but found {} instead", t),
+                format!("operator expected, but got {t} instead"),
             ))
         }
     }
@@ -668,7 +663,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 .ok_or_else(|| {
                     self.err(
                         ErrorKind::UnknownOperator,
-                        format!("Unknown operator {} found", op),
+                        format!("Unknown operator {op} found"),
                     )
                 })?;
 
@@ -693,7 +688,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 if op == *op2 && info.assoc == OpAssoc::None {
                     return Err(self.err(
                         ErrorKind::OperatorAssoc,
-                        format!("Operator {} is non-associative", op2),
+                        format!("Operator {op2} is non-associative"),
                     ));
                 }
             }
@@ -719,7 +714,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             tok if tok.starts_atom() => self.parse_atom_expr(0),
             tok => Err(self.err(
                 ErrorKind::UnexpectedToken,
-                format!("term expected, but found {} instead", tok),
+                format!("term expected, but got {tok} instead"),
             )),
         }
     }
@@ -784,7 +779,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                             tok => {
                                 return Err(self.err(
                                     ErrorKind::UnexpectedToken,
-                                    format!("')' or ',' expected, but found {} instead", tok),
+                                    format!("')' or ',' expected, but got {tok} instead"),
                                 ))
                             }
                         }
@@ -792,7 +787,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 } else {
                     Err(self.err(
                         ErrorKind::UnexpectedToken,
-                        format!("')' or ',' expected, but found {} instead", tok),
+                        format!("')' or ',' expected, but got {tok} instead"),
                     ))
                 }
             }
@@ -874,7 +869,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                         tok => {
                             return Err(self.err(
                                 ErrorKind::UnexpectedToken,
-                                format!("'(', or ',' expected, but found {} instead", tok),
+                                format!("')', or ',' expected, but got {tok} instead"),
                             ))
                         }
                     }
@@ -882,10 +877,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             }
             tok => Err(self.err(
                 ErrorKind::UnexpectedToken,
-                format!(
-                    "(), identifier or tuple expected, but found {} instead",
-                    tok
-                ),
+                format!("(), identifier or tuple expected, but got {tok} instead"),
             )),
         }
     }
@@ -920,10 +912,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             } else {
                 return Err(self.err(
                     ErrorKind::MalformedToken,
-                    format!(
-                        "operator precedence must be between 0 and 9, but got {} instead",
-                        i
-                    ),
+                    format!("operator precedence must be between 0 and 9, but got {i} instead"),
                 ));
             }
         };
@@ -935,7 +924,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             if self.ctx.table.iter().any(|(o, _)| *o == op) {
                 return Err(self.err(
                     ErrorKind::OperatorRedeclared,
-                    format!("operator {} was already declared", op),
+                    format!("operator {op} was already declared"),
                 ));
             }
             self.ctx.table.push((op, info.clone()));

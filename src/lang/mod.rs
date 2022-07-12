@@ -12,7 +12,7 @@ use ast::{Ast, AstKind};
 use std::{
     borrow::Cow,
     collections::{hash_map::Entry, HashMap, HashSet, VecDeque},
-    fmt,
+    fmt::{self, Write},
     rc::Rc,
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -181,7 +181,7 @@ impl Type {
 
                     let mut res = format!("({fst}, {snd}");
                     for t in rest {
-                        res.push_str(&format!(", {t}"));
+                        write!(res, ", {t}").expect("Failed to write formatted type into string");
                     }
                     res.push(')');
                     res.into()
