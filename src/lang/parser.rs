@@ -686,7 +686,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
 
             let rhs = self.parse_atom_expr(next_min_prec)?;
             if let Ast {
-                ast: AstKind::BinOp(ast::BinOp { oper: op2, .. }),
+                kind: AstKind::BinOp(ast::BinOp { oper: op2, .. }),
                 ..
             } = &rhs
             {

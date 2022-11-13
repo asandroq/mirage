@@ -669,7 +669,7 @@ impl Analyser {
 
     #[allow(clippy::too_many_lines)]
     fn convert_ast(&mut self, ast: &Ast, ctx: Ctx) -> Result<Typing> {
-        match &ast.ast {
+        match &ast.kind {
             AstKind::Unit => Ok((
                 ctx,
                 Rc::new(Term {

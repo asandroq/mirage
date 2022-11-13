@@ -51,29 +51,29 @@ pub(crate) fn new_var(var: String) -> AstBuilder {
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct Ast {
-    pub ast: AstKind,
+    pub kind: AstKind,
     pub span: Span,
 }
 
 impl fmt::Display for Ast {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.ast.fmt(f)
+        self.kind.fmt(f)
     }
 }
 
 pub(crate) struct AstBuilder {
-    ast: AstKind,
+    kind: AstKind,
 }
 
 impl AstBuilder {
-    pub(crate) fn new(ast: AstKind) -> Self {
-        Self { ast }
+    pub(crate) fn new(kind: AstKind) -> Self {
+        Self { kind }
     }
 
     pub(crate) fn with_span(self, begin: Position, end: Position) -> Ast {
         let span = Span { begin, end };
         Ast {
-            ast: self.ast,
+            kind: self.kind,
             span,
         }
     }
