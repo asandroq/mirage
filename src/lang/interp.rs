@@ -36,7 +36,7 @@ impl Interpreter {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn eval_term(&self, term: &Rc<Term>, env: &Env) -> Result<Rc<Term>> {
+    fn eval_term(term: &Rc<Term>, env: &Env) -> Result<Rc<Term>> {
         match &term.kind {
             TermKind::Unit | TermKind::Bool(..) | TermKind::Int(..) | TermKind::Clo(..) => {
                 Ok(Rc::clone(term))
@@ -48,7 +48,7 @@ impl Interpreter {
                 } = fix_or_val.as_ref()
                 {
                     // Given the "infinite" nature of fix, we need to keep re-evaluating it
-                    self.eval_term(&fix_or_val, env)
+                    Self::eval_term(&fix_or_val, env)
                 } else {
                     Ok(fix_or_val)
                 }
@@ -69,16 +69,16 @@ impl Interpreter {
             }
             TermKind::Fix(v, body) => {
                 let new_env = env.cons((v.clone(), Rc::clone(term)));
-                self.eval_term(body, &new_env)
+                Self::eval_term(body, &new_env)
             }
             TermKind::App(fun, args) => {
-                let mut val = self.eval_term(fun, env)?;
+                let mut val = Self::eval_term(fun, env)?;
                 let mut args_q = args.iter().collect::<VecDeque<_>>();
                 while !args_q.is_empty() {
                     if let TermKind::Clo(vars, body, clo_env) = &val.kind {
                         let (v1, vs) = vars.parts();
                         let a1 = args_q.pop_front().unwrap();
-                        let e1 = self.eval_term(a1, env)?;
+                        let e1 = Self::eval_term(a1, env)?;
                         let mut new_env = clo_env.cons((v1.clone(), e1));
                         for v in vs {
                             let a = args_q.pop_front().ok_or_else(|| {
@@ -86,10 +86,10 @@ impl Interpreter {
                                     "insufficient number of arguments given to closure".to_string(),
                                 )
                             })?;
-                            let e = self.eval_term(a, env)?;
+                            let e = Self::eval_term(a, env)?;
                             new_env = new_env.cons((v.clone(), e));
                         }
-                        val = self.eval_term(body, &new_env)?;
+                        val = Self::eval_term(body, &new_env)?;
                     } else {
                         return Err(Error::RuntimeError(format!(
                             "term {val} is not a closure but is being applied"
@@ -99,12 +99,12 @@ impl Interpreter {
                 Ok(val)
             }
             TermKind::If(t1, t2, t3) => {
-                let guard = self.eval_term(t1, env)?;
+                let guard = Self::eval_term(t1, env)?;
                 if let TermKind::Bool(b) = guard.kind {
                     if b {
-                        self.eval_term(t2, env)
+                        Self::eval_term(t2, env)
                     } else {
-                        self.eval_term(t3, env)
+                        Self::eval_term(t3, env)
                     }
                 } else {
                     Err(Error::RuntimeError(format!(
@@ -114,23 +114,23 @@ impl Interpreter {
                 }
             }
             TermKind::Let(v, expr, body) => {
-                let arg = self.eval_term(expr, env)?;
+                let arg = Self::eval_term(expr, env)?;
                 let new_env = env.cons((v.clone(), arg));
-                self.eval_term(body, &new_env)
+                Self::eval_term(body, &new_env)
             }
             TermKind::Tuple(fst, snd, rest) => {
-                let fst = self.eval_term(fst, env)?;
-                let snd = self.eval_term(snd, env)?;
+                let fst = Self::eval_term(fst, env)?;
+                let snd = Self::eval_term(snd, env)?;
                 let rest = rest
                     .iter()
-                    .map(|t| self.eval_term(t, env))
+                    .map(|t| Self::eval_term(t, env))
                     .collect::<Result<Vec<_>>>()?;
                 Ok(Rc::new(Term {
                     kind: TermKind::Tuple(fst, snd, rest),
                 }))
             }
             TermKind::TupleRef(i, t) => {
-                let v = self.eval_term(t, env)?;
+                let v = Self::eval_term(t, env)?;
                 if let TermKind::Tuple(fst, snd, rest) = &v.kind {
                     if *i == 0 {
                         Ok(Rc::clone(fst))
@@ -147,9 +147,9 @@ impl Interpreter {
                 }
             }
             TermKind::BinOp(op, t1, t2) => {
-                let e1 = self.eval_term(t1, env)?;
+                let e1 = Self::eval_term(t1, env)?;
                 if let TermKind::Int(lhs) = e1.kind {
-                    let e2 = self.eval_term(t2, env)?;
+                    let e2 = Self::eval_term(t2, env)?;
                     if let TermKind::Int(rhs) = e2.kind {
                         match op.as_str() {
                             "+" => Ok(Rc::new(Term {
@@ -203,7 +203,7 @@ impl Interpreter {
         let (env, ctx) = self.extract();
         let mut anal = Analyser::new();
         let (term, ttype) = anal.typecheck(&sterm, ctx)?;
-        let val = self.eval_term(&term, &env)?;
+        let val = Self::eval_term(&term, &env)?;
         Ok((val.as_ref().clone(), ttype))
     }
 
