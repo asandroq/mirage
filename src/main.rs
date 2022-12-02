@@ -16,7 +16,7 @@ fn main() -> Result<()> {
     let mut interp = Interpreter::new();
     interp.load_prelude()?;
 
-    let mut rl = Editor::<()>::new();
+    let mut rl = Editor::<()>::new()?;
     let hist_path = if let Ok(home) = env::var("HOME") {
         Path::new(&home).join(".mirage_history.txt")
     } else {
