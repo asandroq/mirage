@@ -49,9 +49,15 @@ pub(crate) fn new_var(var: String) -> AstBuilder {
     AstBuilder::new(AstKind::Var(var))
 }
 
+/// A node of the source code's abstract syntax tree.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct Ast {
     pub kind: AstKind,
+
+    /// The context from where the source code came.
+    pub ctx: String,
+
+    /// The start and end positions of the node in the source code.
     pub span: Span,
 }
 
@@ -63,18 +69,52 @@ impl fmt::Display for Ast {
 
 pub(crate) struct AstBuilder {
     kind: AstKind,
+    ctx: Option<String>,
+    span: Option<Span>,
 }
 
 impl AstBuilder {
     pub(crate) fn new(kind: AstKind) -> Self {
-        Self { kind }
+        Self {
+            kind,
+            ctx: None,
+            span: None,
+        }
     }
 
-    pub(crate) fn with_span(self, begin: Position, end: Position) -> Ast {
-        let span = Span { begin, end };
-        Ast {
+    pub(crate) fn build(self) -> Result<Ast, Error> {
+        let ctx = self.ctx.ok_or(Error::MissingContext)?;
+        let span = self.span.ok_or(Error::MissingSpan)?;
+
+        Ok(Ast {
             kind: self.kind,
+            ctx,
             span,
+        })
+    }
+
+    pub(crate) fn with_context<S>(self, context: &S) -> Self
+    where
+        S: ToString + ?Sized,
+    {
+        let Self { kind, ctx: _, span } = self;
+        let ctx = context.to_string();
+
+        Self {
+            kind,
+            ctx: Some(ctx),
+            span,
+        }
+    }
+
+    pub(crate) fn with_span(self, begin: Position, end: Position) -> Self {
+        let Self { kind, ctx, span: _ } = self;
+        let span = Span { begin, end };
+
+        Self {
+            kind,
+            ctx,
+            span: Some(span),
         }
     }
 }
@@ -383,12 +423,12 @@ impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Type::Unit => write!(f, "()"),
-            Type::Ident(ty) => write!(f, "{}", ty),
-            Type::Func(ty1, ty2) => write!(f, "{} → {}", ty1, ty2),
+            Type::Ident(ty) => write!(f, "{ty}"),
+            Type::Func(ty1, ty2) => write!(f, "{ty1} → {ty2}"),
             Type::Tuple(fst, snd, rest) => {
-                write!(f, "({}, {}", fst, snd)?;
+                write!(f, "({fst}, {snd}")?;
                 for t in rest {
-                    write!(f, ", {}", t)?;
+                    write!(f, ", {t}")?;
                 }
                 write!(f, ")")
             }
@@ -396,7 +436,7 @@ impl fmt::Display for Type {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct Span {
     pub begin: Position,
     pub end: Position,
@@ -407,4 +447,19 @@ pub(crate) struct Span {
 pub(crate) struct Position {
     pub column: usize,
     pub row: usize,
+}
+
+impl Default for Position {
+    fn default() -> Self {
+        Self { column: 0, row: 1 }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub(crate) enum Error {
+    #[error("The context is missing from the AST node")]
+    MissingContext,
+
+    #[error("The span is missing from the AST node")]
+    MissingSpan,
 }

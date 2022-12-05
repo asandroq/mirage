@@ -2,12 +2,13 @@
 
 use crate::{
     collections::nonemptyvec::NonEmptyVec,
-    lang::ast::{self, Ast, AstKind, Position, Type},
+    lang::ast::{self, Ast, AstBuilder, AstKind, Error as AstError, Position, Type},
 };
 use std::{borrow::Cow, fmt};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ErrorKind {
+    Ast(AstError),
     MalformedToken,
     NonUniqueVariable,
     OperatorAssoc,
@@ -37,6 +38,12 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+impl From<AstError> for ErrorKind {
+    fn from(err: AstError) -> Self {
+        Self::Ast(err)
+    }
+}
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -110,14 +117,14 @@ impl fmt::Display for Token {
         match self {
             Token::Arrow => write!(f, "'->'"),
             Token::Backslash => write!(f, "'\\'"),
-            Token::Bool(b) => write!(f, "boolean '{}'", b),
+            Token::Bool(b) => write!(f, "boolean '{b}'"),
             Token::Colon => write!(f, "':'"),
             Token::Comma => write!(f, "','"),
             Token::Else => write!(f, "keyword 'else'"),
             Token::End => write!(f, "end of input"),
             Token::Equals => write!(f, "'='"),
-            Token::Ident(i) => write!(f, "identifier '{}'", i),
-            Token::Int(i) => write!(f, "integer '{}'", i),
+            Token::Ident(i) => write!(f, "identifier '{i}'"),
+            Token::Int(i) => write!(f, "integer '{i}'"),
             Token::If => write!(f, "keyword 'if'"),
             Token::In => write!(f, "keyword 'in'"),
             Token::Infix => write!(f, "keyword 'infix'"),
@@ -126,7 +133,7 @@ impl fmt::Display for Token {
             Token::Let => write!(f, "keyword 'let'"),
             Token::Letrec => write!(f, "keyword 'letrec'"),
             Token::LParen => write!(f, "'('"),
-            Token::Op(o) => write!(f, "operator '{}'", o),
+            Token::Op(o) => write!(f, "operator '{o}'"),
             Token::Pound => write!(f, "'#'"),
             Token::RParen => write!(f, "')'"),
             Token::SemiColon => write!(f, "';'"),
@@ -480,6 +487,18 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         }
     }
 
+    fn build_ast(&self, builder: AstBuilder) -> Result<Ast> {
+        builder
+            .with_context(&self.tokens.context)
+            .build()
+            .map_err(|err| Error {
+                kind: ErrorKind::from(err),
+                context: self.tokens.context.clone(),
+                position: self.position,
+                msg: "AST error".into(),
+            })
+    }
+
     fn err<S: Into<Cow<'static, str>>>(&self, kind: ErrorKind, msg: S) -> Error {
         Error {
             kind,
@@ -576,7 +595,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         let term3 = self.parse_term()?;
         let end = self.position;
 
-        Ok(ast::new_if(term1, term2, term3).with_span(begin, end))
+        self.build_ast(ast::new_if(term1, term2, term3).with_span(begin, end))
     }
 
     // lambda : '\' ident (... ident)* '=>' term
@@ -588,7 +607,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         let term = self.parse_term()?;
         let end = self.position;
 
-        Ok(ast::new_lambda(vars, term).with_span(begin, end))
+        self.build_ast(ast::new_lambda(vars, term).with_span(begin, end))
     }
 
     // let : LET ident (... ident)* = term IN term
@@ -602,7 +621,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         let term2 = self.parse_term()?;
         let end = self.position;
 
-        Ok(ast::new_let(vars, term1, term2).with_span(begin, end))
+        self.build_ast(ast::new_let(vars, term1, term2).with_span(begin, end))
     }
 
     // letrec : LETREC ident : type = term IN term
@@ -624,7 +643,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         let term2 = self.parse_term()?;
         let end = self.position;
 
-        Ok(ast::new_letrec(var, vty, term1, term2).with_span(begin, end))
+        self.build_ast(ast::new_letrec(var, vty, term1, term2).with_span(begin, end))
     }
 
     // atom_seq : atom (atom ...)?
@@ -643,7 +662,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             }
             let end = self.position;
 
-            Ok(ast::new_app(left, atoms).with_span(begin, end))
+            self.build_ast(ast::new_app(left, atoms).with_span(begin, end))
         } else {
             Ok(left)
         }
@@ -700,7 +719,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             }
             let end = self.position;
 
-            lhs = ast::new_binop(op, lhs, rhs).with_span(begin, end);
+            lhs = self.build_ast(ast::new_binop(op, lhs, rhs).with_span(begin, end))?;
         }
 
         Ok(lhs)
@@ -733,6 +752,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
     //      | '(' term ')'
     //      | '(' term ',' term ',' term ... ')'
     //      | '#' int '(' term ')'
+    #[allow(clippy::too_many_lines)]
     fn parse_atom(&mut self) -> Result<Ast> {
         match self.peek_token()? {
             Token::Bool(b) => {
@@ -740,7 +760,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 self.next_token()?;
                 let end = self.position;
 
-                Ok(ast::new_bool(b).with_span(begin, end))
+                self.build_ast(ast::new_bool(b).with_span(begin, end))
             }
             Token::Ident(ident) => {
                 let begin = self.position;
@@ -755,7 +775,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                         ),
                     ))
                 } else {
-                    Ok(ast::new_var(ident).with_span(begin, end))
+                    self.build_ast(ast::new_var(ident).with_span(begin, end))
                 }
             }
             Token::LParen => {
@@ -775,7 +795,9 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                             Token::RParen => {
                                 self.consume_token(Token::RParen)?;
                                 let end = self.position;
-                                return Ok(ast::new_tuple(fst, snd, rest).with_span(begin, end));
+                                return self.build_ast(
+                                    ast::new_tuple(fst, snd, rest).with_span(begin, end),
+                                );
                             }
                             Token::Comma => {
                                 self.consume_token(Token::Comma)?;
@@ -802,14 +824,14 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 self.next_token()?;
                 let end = self.position;
 
-                Ok(ast::new_unit().with_span(begin, end))
+                self.build_ast(ast::new_unit().with_span(begin, end))
             }
             Token::Int(i) => {
                 let begin = self.position;
                 self.next_token()?;
                 let end = self.position;
 
-                Ok(ast::new_int(i).with_span(begin, end))
+                self.build_ast(ast::new_int(i).with_span(begin, end))
             }
             Token::Pound => {
                 let begin = self.position;
@@ -823,7 +845,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
 
                     #[allow(clippy::cast_possible_truncation)]
                     #[allow(clippy::cast_sign_loss)]
-                    Ok(ast::new_tupleref(index as usize, tuple).with_span(begin, end))
+                    self.build_ast(ast::new_tupleref(index as usize, tuple).with_span(begin, end))
                 } else {
                     Err(self.err(
                         ErrorKind::UnexpectedToken,

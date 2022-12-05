@@ -1,16 +1,17 @@
-use super::{Analyser, Ctx, Term, Type};
+use super::{
+    parser::{Parser, ParserCtx},
+    term::{App, BinOp, Closure, Env, Fix, If, Lambda, Let, Term, TermKind, Tuple, TupleRef},
+    type_checker::{Ctx, TypeChecker},
+    Module, Type, Variable,
+};
 use crate::{
     collections::{nonemptyvec::NonEmptyVec, sharedlist::SharedList},
     error::{Error, Result},
-    lang::{
-        parser::{Parser, ParserCtx},
-        Env, Module, TermKind, Variable,
-    },
 };
 use std::{collections::VecDeque, rc::Rc};
 
 #[derive(Debug)]
-pub struct Interpreter {
+pub(crate) struct Interpreter {
     /// Loaded modules.
     modules: Vec<Module>,
 
@@ -45,6 +46,7 @@ impl Interpreter {
                 let fix_or_val = lookup(v, env)?;
                 if let Term {
                     kind: TermKind::Fix(..),
+                    ..
                 } = fix_or_val.as_ref()
                 {
                     // Given the "infinite" nature of fix, we need to keep re-evaluating it
@@ -53,7 +55,7 @@ impl Interpreter {
                     Ok(fix_or_val)
                 }
             }
-            TermKind::Lam(v, body) => {
+            TermKind::Lam(Lambda { vars, body }) => {
                 let fv = term
                     .free_vars()
                     .into_iter()
@@ -63,19 +65,31 @@ impl Interpreter {
                     })
                     .collect::<Result<Vec<_>>>()?;
                 let clo_env = SharedList::nil().extend(fv.into_iter());
+
+                let closure = Closure {
+                    vars: vars.clone(),
+                    body: Rc::clone(body),
+                    env: clo_env,
+                };
                 Ok(Rc::new(Term {
-                    kind: TermKind::Clo(v.clone(), Rc::clone(body), clo_env),
+                    kind: TermKind::Clo(closure),
+                    span: term.span,
                 }))
             }
-            TermKind::Fix(v, body) => {
-                let new_env = env.cons((v.clone(), Rc::clone(term)));
+            TermKind::Fix(Fix { var, body }) => {
+                let new_env = env.cons((var.clone(), Rc::clone(term)));
                 Self::eval_term(body, &new_env)
             }
-            TermKind::App(fun, args) => {
-                let mut val = Self::eval_term(fun, env)?;
+            TermKind::App(App { oper, args }) => {
+                let mut val = Self::eval_term(oper, env)?;
                 let mut args_q = args.iter().collect::<VecDeque<_>>();
                 while !args_q.is_empty() {
-                    if let TermKind::Clo(vars, body, clo_env) = &val.kind {
+                    if let TermKind::Clo(Closure {
+                        vars,
+                        body,
+                        env: clo_env,
+                    }) = &val.kind
+                    {
                         let (v1, vs) = vars.parts();
                         let a1 = args_q.pop_front().unwrap();
                         let e1 = Self::eval_term(a1, env)?;
@@ -98,13 +112,17 @@ impl Interpreter {
                 }
                 Ok(val)
             }
-            TermKind::If(t1, t2, t3) => {
-                let guard = Self::eval_term(t1, env)?;
+            TermKind::If(If {
+                cond,
+                conseq,
+                alter,
+            }) => {
+                let guard = Self::eval_term(cond, env)?;
                 if let TermKind::Bool(b) = guard.kind {
                     if b {
-                        Self::eval_term(t2, env)
+                        Self::eval_term(conseq, env)
                     } else {
-                        Self::eval_term(t3, env)
+                        Self::eval_term(alter, env)
                     }
                 } else {
                     Err(Error::RuntimeError(format!(
@@ -113,12 +131,12 @@ impl Interpreter {
                     )))
                 }
             }
-            TermKind::Let(v, expr, body) => {
+            TermKind::Let(Let { var, expr, body }) => {
                 let arg = Self::eval_term(expr, env)?;
-                let new_env = env.cons((v.clone(), arg));
+                let new_env = env.cons((var.clone(), arg));
                 Self::eval_term(body, &new_env)
             }
-            TermKind::Tuple(fst, snd, rest) => {
+            TermKind::Tuple(Tuple { fst, snd, rest }) => {
                 let fst = Self::eval_term(fst, env)?;
                 let snd = Self::eval_term(snd, env)?;
                 let rest = rest
@@ -126,18 +144,19 @@ impl Interpreter {
                     .map(|t| Self::eval_term(t, env))
                     .collect::<Result<Vec<_>>>()?;
                 Ok(Rc::new(Term {
-                    kind: TermKind::Tuple(fst, snd, rest),
+                    kind: TermKind::Tuple(Tuple { fst, snd, rest }),
+                    span: term.span,
                 }))
             }
-            TermKind::TupleRef(i, t) => {
-                let v = Self::eval_term(t, env)?;
-                if let TermKind::Tuple(fst, snd, rest) = &v.kind {
-                    if *i == 0 {
+            TermKind::TupleRef(TupleRef { index, tuple }) => {
+                let v = Self::eval_term(tuple, env)?;
+                if let TermKind::Tuple(Tuple { fst, snd, rest }) = &v.kind {
+                    if *index == 0 {
                         Ok(Rc::clone(fst))
-                    } else if *i == 1 {
+                    } else if *index == 1 {
                         Ok(Rc::clone(snd))
                     } else {
-                        Ok(Rc::clone(&rest[*i - 2]))
+                        Ok(Rc::clone(&rest[*index - 2]))
                     }
                 } else {
                     Err(Error::RuntimeError(format!(
@@ -146,40 +165,49 @@ impl Interpreter {
                     )))
                 }
             }
-            TermKind::BinOp(op, t1, t2) => {
-                let e1 = Self::eval_term(t1, env)?;
+            TermKind::BinOp(BinOp { oper, lhs, rhs }) => {
+                let e1 = Self::eval_term(lhs, env)?;
                 if let TermKind::Int(lhs) = e1.kind {
-                    let e2 = Self::eval_term(t2, env)?;
+                    let e2 = Self::eval_term(rhs, env)?;
                     if let TermKind::Int(rhs) = e2.kind {
-                        match op.as_str() {
+                        match oper.as_str() {
                             "+" => Ok(Rc::new(Term {
                                 kind: TermKind::Int(lhs + rhs),
+                                span: term.span,
                             })),
                             "-" => Ok(Rc::new(Term {
                                 kind: TermKind::Int(lhs - rhs),
+                                span: term.span,
                             })),
                             "*" => Ok(Rc::new(Term {
                                 kind: TermKind::Int(lhs * rhs),
+                                span: term.span,
                             })),
                             "/" => Ok(Rc::new(Term {
                                 kind: TermKind::Int(lhs / rhs),
+                                span: term.span,
                             })),
                             "==" => Ok(Rc::new(Term {
                                 kind: TermKind::Bool(lhs == rhs),
+                                span: term.span,
                             })),
                             "<" => Ok(Rc::new(Term {
                                 kind: TermKind::Bool(lhs < rhs),
+                                span: term.span,
                             })),
                             ">" => Ok(Rc::new(Term {
                                 kind: TermKind::Bool(lhs > rhs),
+                                span: term.span,
                             })),
                             "<=" => Ok(Rc::new(Term {
                                 kind: TermKind::Bool(lhs <= rhs),
+                                span: term.span,
                             })),
                             ">=" => Ok(Rc::new(Term {
                                 kind: TermKind::Bool(lhs >= rhs),
+                                span: term.span,
                             })),
-                            _ => Err(Error::RuntimeError(format!("Unknown operator {op}"))),
+                            _ => Err(Error::RuntimeError(format!("Unknown operator {oper}"))),
                         }
                     } else {
                         Err(Error::RuntimeError(format!(
@@ -201,8 +229,8 @@ impl Interpreter {
         let mut parser = Parser::new(&mut self.parser_ctx, input.chars(), input_ctx);
         let sterm = parser.parse()?;
         let (env, ctx) = self.extract();
-        let mut anal = Analyser::new();
-        let (term, ttype) = anal.typecheck(&sterm, ctx)?;
+        let checker = TypeChecker::new();
+        let (term, ttype) = checker.typecheck(&sterm, ctx)?;
         let val = Self::eval_term(&term, &env)?;
         Ok((val.as_ref().clone(), ttype))
     }
@@ -256,7 +284,10 @@ mod test {
     use super::Interpreter;
     use crate::{
         error::Result,
-        lang::{Term, TermKind},
+        lang::{
+            ast::Span,
+            term::{Term, TermKind, Tuple},
+        },
     };
     use std::rc::Rc;
 
@@ -290,14 +321,20 @@ mod test {
         let t2 = eval_str(i2)?;
         let tfalse = Rc::new(Term {
             kind: TermKind::Bool(false),
+            span: Span::default(),
         });
-        let rfalse = vec![Rc::new(Term {
-            kind: TermKind::Bool(false),
-        })];
-        assert!(matches!(
-            t2.kind,
-            TermKind::Tuple(fst, snd, rest) if fst == tfalse && snd == tfalse && rest == rfalse
-        ));
+
+        if let TermKind::Tuple(Tuple { fst, snd, mut rest }) = t2.kind {
+            assert_eq!(fst.kind, tfalse.kind);
+            assert_eq!(snd.kind, tfalse.kind);
+            if let Some(first) = rest.pop() {
+                assert_eq!(first.kind, tfalse.kind);
+            } else {
+                panic!("Resulting tuple doesn't have enough elements");
+            }
+        } else {
+            panic!("Result of evaluation is not a tuple")
+        };
 
         let i3 = r#"
            infix 6 <;
@@ -322,20 +359,16 @@ mod test {
         let input = r#"
            infixl 8 +;
            let id = \a => a
-           in let double = \f a => f (f a)
+           in let twice = \f a => f (f a)
               in let inc = \n => n + 1
                  in let not = \b => if b then false else true
-                    in if double not (id false)
-                       then id (double inc 3)
-                       else double inc (id 7)
+                    in if twice not (id false)
+                       then id (twice inc 3)
+                       else twice inc (id 7)
         "#;
 
-        assert_eq!(
-            eval_str(input)?,
-            Term {
-                kind: TermKind::Int(9)
-            }
-        );
+        let res = eval_str(input)?;
+        assert_eq!(res.kind, TermKind::Int(9),);
 
         Ok(())
     }
