@@ -10,6 +10,8 @@ use crate::{
 };
 use std::{collections::VecDeque, rc::Rc};
 
+type Pattern = super::Pattern<Variable>;
+
 #[derive(Debug)]
 pub(crate) struct Interpreter {
     /// Loaded modules.
@@ -64,7 +66,7 @@ impl Interpreter {
                         Ok((var, val))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let clo_env = SharedList::nil().extend(fv.into_iter());
+                let clo_env = SharedList::nil().extend(fv);
 
                 let closure = Closure {
                     vars: vars.clone(),
@@ -126,14 +128,15 @@ impl Interpreter {
                     }
                 } else {
                     Err(Error::RuntimeError(format!(
-                        "`if` guard must be a boolean, but {:?} was given",
-                        guard
+                        "`if` guard must be a boolean, but {guard:?} was given",
                     )))
                 }
             }
-            TermKind::Let(Let { var, expr, body }) => {
+            TermKind::Let(Let { pat, expr, body }) => {
                 let arg = Self::eval_term(expr, env)?;
-                let new_env = env.cons((var.clone(), arg));
+                let rib = Self::match_pattern(pat, &arg)?;
+                let new_env = env.extend(rib);
+
                 Self::eval_term(body, &new_env)
             }
             TermKind::Tuple(Tuple { fst, snd, rest }) => {
@@ -253,6 +256,38 @@ impl Interpreter {
         }
 
         (env, ctx)
+    }
+
+    fn match_pattern(pat: &Pattern, term: &Rc<Term>) -> Result<NonEmptyVec<(Variable, Rc<Term>)>> {
+        match pat {
+            Pattern::Var(var) => Ok(NonEmptyVec::new((var.clone(), Rc::clone(term)))),
+            Pattern::Tuple(fst_pat, snd_pat, rest_pat) => {
+                if let TermKind::Tuple(Tuple { fst, snd, rest }) = &term.kind {
+                    if rest_pat.len() == rest.len() {
+                        let mut env = Self::match_pattern(fst_pat, fst)?;
+                        let snd_env = Self::match_pattern(snd_pat, snd)?;
+                        env.extend(snd_env);
+
+                        for (pat, term) in rest_pat.iter().zip(rest) {
+                            let e = Self::match_pattern(pat, term)?;
+                            env.extend(e);
+                        }
+
+                        Ok(env)
+                    } else {
+                        Err(Error::RuntimeError(format!(
+                            "Tuple pattern has {} elements but value has {} elements",
+                            rest_pat.len() + 2,
+                            rest.len() + 2
+                        )))
+                    }
+                } else {
+                    Err(Error::RuntimeError(
+                        "Cannot match tuple pattern with value".to_string(),
+                    ))
+                }
+            }
+        }
     }
 }
 

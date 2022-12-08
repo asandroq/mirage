@@ -1,9 +1,7 @@
 //! Parser for the Mirage language.
 
-use crate::{
-    collections::nonemptyvec::NonEmptyVec,
-    lang::ast::{self, Ast, AstBuilder, AstKind, Error as AstError, Position, Type},
-};
+use super::ast::{self, Ast, AstBuilder, AstKind, Error as AstError, Position, Type};
+use crate::collections::nonemptyvec::NonEmptyVec;
 use std::{borrow::Cow, fmt};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -477,6 +475,8 @@ pub struct Parser<'ctx, I: Iterator<Item = char>> {
     tokens: Lexer<I>,
 }
 
+type Pattern = super::Pattern<String>;
+
 impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
     pub fn new(ctx: &'ctx mut ParserCtx, input: I, input_ctx: String) -> Parser<'ctx, I> {
         Parser {
@@ -604,24 +604,45 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         self.consume_token(Token::Backslash)?;
         let vars = self.parse_unique_identifiers()?;
         self.consume_token(Token::ThickArrow)?;
-        let term = self.parse_term()?;
+        let body = self.parse_term()?;
         let end = self.position;
 
-        self.build_ast(ast::new_lambda(vars, term).with_span(begin, end))
+        self.build_ast(ast::new_lambda(vars, body).with_span(begin, end))
     }
 
-    // let : LET ident (... ident)* = term IN term
+    // let : LET pattern (... ident)* = term IN term
     fn parse_let(&mut self) -> Result<Ast> {
         let begin = self.position;
         self.consume_token(Token::Let)?;
-        let vars = self.parse_unique_identifiers()?;
-        self.consume_token(Token::Equals)?;
-        let term1 = self.parse_term()?;
-        self.consume_token(Token::In)?;
-        let term2 = self.parse_term()?;
-        let end = self.position;
+        let pat = self.parse_pattern()?;
+        let tok = self.peek_token()?;
+        match (pat, tok) {
+            (Pattern::Var(var), Token::Ident(_)) => {
+                // this is actually a lambda declaration
+                let vars = self.parse_unique_identifiers()?;
 
-        self.build_ast(ast::new_let(vars, term1, term2).with_span(begin, end))
+                self.consume_token(Token::Equals)?;
+                let expr = self.parse_term()?;
+                let lam_end = self.position;
+
+                self.consume_token(Token::In)?;
+                let body = self.parse_term()?;
+                let end = self.position;
+
+                let lam = self.build_ast(ast::new_lambda(vars, expr).with_span(begin, lam_end))?;
+                self.build_ast(ast::new_let(Pattern::Var(var), lam, body).with_span(begin, end))
+            }
+            (pat, _) => {
+                self.consume_token(Token::Equals)?;
+                let expr = self.parse_term()?;
+
+                self.consume_token(Token::In)?;
+                let body = self.parse_term()?;
+                let end = self.position;
+
+                self.build_ast(ast::new_let(pat, expr, body).with_span(begin, end))
+            }
+        }
     }
 
     // letrec : LETREC ident : type = term IN term
@@ -1009,6 +1030,50 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         Ok(module)
     }
 
+    // pattern: variable
+    //        | '(' pattern ',' pattern ...')'
+    fn parse_pattern(&mut self) -> Result<Pattern> {
+        match self.peek_token()? {
+            Token::Ident(_) => {
+                let var = self.consume_identifier()?;
+                Ok(Pattern::Var(var))
+            }
+            Token::LParen => {
+                self.next_token()?;
+                let fst = self.parse_pattern()?;
+                self.consume_token(Token::Comma)?;
+                let snd = self.parse_pattern()?;
+
+                let mut rest = Vec::new();
+                loop {
+                    match self.peek_token()? {
+                        Token::Comma => {
+                            self.next_token()?;
+                            let pat = self.parse_pattern()?;
+                            rest.push(pat);
+                        }
+                        Token::RParen => {
+                            self.next_token()?;
+                            break;
+                        }
+                        tok => {
+                            return Err(self.err(
+                                ErrorKind::UnexpectedToken,
+                                format!("Unexpected token when reading tuple pattern: {tok}"),
+                            ))
+                        }
+                    }
+                }
+
+                Ok(Pattern::Tuple(Box::new(fst), Box::new(snd), rest))
+            }
+            tok => Err(self.err(
+                ErrorKind::UnexpectedToken,
+                format!("Pattern expected, got {tok} instead"),
+            )),
+        }
+    }
+
     fn parse_unique_identifiers(&mut self) -> Result<NonEmptyVec<String>> {
         let var = self.consume_identifier()?;
         let mut vars = NonEmptyVec::new(var);
@@ -1041,7 +1106,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]
@@ -1139,21 +1204,21 @@ mod test {
 
     #[test]
     fn test_parse_tuple() -> Result<()> {
-        let input1 = r#"
+        let input = r#"
            let x = (false, (), -526)
            in let y = ((), 42191, if true then 0 else 1)
               in let g = \t => if false then t else (true, (), 0)
                  in g x
         "#;
-        parse_str(input1)?;
+        parse_str(input)?;
 
-        let input2 = r#"
+        let input = r#"
            let x = ((), false, -99, (), 42)
               in let a = #0(x)
                 in let b = #2(x)
                   in (a, b)
         "#;
-        parse_str(input2)
+        parse_str(input)
     }
 
     #[test]
@@ -1163,9 +1228,32 @@ mod test {
            infixl 8 +,-;
            infixl 9 *,/;
            let t = abac + 76 *x_3pill - 11 < 91* 3+j
-           in t - 14/9 == t+ 78 * 1 + 44
+              in t - 14/9 == t+ 78 * 1 + 44
         "#;
 
         parse_str(input)
+    }
+
+    #[test]
+    fn test_parse_pattern() -> Result<()> {
+        let input = r#"
+            let my_var = 2
+               in let (v1, v2) = (false, 99)
+                     in let (v1, v2, a, b, c) = (1, 1, 1, 1, 1)
+                           in let (a, (b, c, d), e, f) = (1, (1, 1, 1), 1, 1) in ()
+        "#;
+        parse_str(input)
+    }
+
+    #[test]
+    fn test_parse_pattern_error() {
+        let input = "let 42 = 99 in ()";
+        assert!(parse_str(input).is_err());
+
+        let input = "let (abc,) = 99 in ()";
+        assert!(parse_str(input).is_err());
+
+        let input = "let (a, 42, c) = 99 in ()";
+        assert!(parse_str(input).is_err());
     }
 }

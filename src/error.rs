@@ -20,6 +20,9 @@ pub enum Error {
     #[error("Parser error: {0}")]
     ParserError(#[from] crate::lang::parser::Error),
 
+    #[error("Pattern match: {0}")]
+    PatternMatch(String),
+
     #[error("{0}")]
     RuntimeError(String),
 

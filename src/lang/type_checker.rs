@@ -1,7 +1,7 @@
 use super::{
-    ast::{self, Ast, AstKind, Span},
+    ast::{self, Ast, AstKind},
     term::{App, BinOp, Fix, If, Lambda, Let, Term, TermKind, Tuple, TupleRef},
-    Variable,
+    Pattern, Variable,
 };
 use crate::{
     collections::nonemptyvec::NonEmptyVec,
@@ -136,7 +136,7 @@ impl TypeChecker {
                 (TermKind::If(if_), ctx, ty, cs)
             }
             AstKind::Let(let_) => {
-                let (ctx, let_, ty, cs) = self.check_let(let_, ctx, ast.span)?;
+                let (ctx, let_, ty, cs) = self.check_let(let_, ctx)?;
                 (TermKind::Let(let_), ctx, ty, cs)
             }
             AstKind::Letrec(letrec) => {
@@ -144,7 +144,7 @@ impl TypeChecker {
                 let var_type = letrec
                     .vty
                     .as_ref()
-                    .map_or(Ok(Type::Var(Variable::local("FIX"))), Self::check_type)?;
+                    .map_or(Ok(Type::Var(Variable::local("FIX"))), Self::convert_type)?;
                 let ts = TypeScheme::new(var_type.clone());
 
                 let mut ctx = ctx;
@@ -167,9 +167,10 @@ impl TypeChecker {
                     kind: TermKind::Fix(fix),
                     span: ast.span,
                 });
+                let pat = Pattern::Var(var);
 
                 (
-                    TermKind::Let(Let { var, expr, body }),
+                    TermKind::Let(Let { pat, expr, body }),
                     ctx.apply_subst(&subst),
                     body_type.apply(&subst),
                     cs,
@@ -313,54 +314,23 @@ impl TypeChecker {
             ty = Type::Func(Box::new(ts.ptype), Box::new(ty));
         }
 
+        let subst = cs.unify()?;
         let lam = Lambda { vars, body };
-        Ok((ctx, lam, ty, cs))
+        Ok((ctx.apply_subst(&subst), lam, ty.apply(&subst), cs))
     }
 
-    fn check_let(
-        &self,
-        let_: &ast::Let,
-        ctx: Ctx,
-        span: Span,
-    ) -> Result<(Ctx, Let, Type, ConstrSet)> {
-        let vars = let_.vars.as_ref().map(Variable::local);
-        let (var, mut rest) = vars.into_parts();
+    fn check_let(&self, let_: &ast::Let, ctx: Ctx) -> Result<(Ctx, Let, Type, ConstrSet)> {
+        let (mut ctx, expr, expr_ty, mut cs) = self.check(&let_.expr, ctx)?;
 
-        // handle the case where the `let` expression is a lambda abstraction
-        let (mut ctx, expr, expr_ty, mut cs) = if let Some(lvar) = rest.next() {
-            let mut lvars = NonEmptyVec::new(lvar);
-            lvars.extend(rest);
-            let (ctx, lam, ty, cs) = self.check_lambda(lvars, &let_.expr, ctx)?;
-            let term = Rc::new(Term {
-                kind: TermKind::Lam(lam),
-                span,
-            });
-            (ctx, term, ty, cs)
-        } else {
-            self.check(&let_.expr, ctx)?
-        };
-
-        // Only variables not bound in context can be
-        // universally quantified
-        let tvars = expr_ty
-            .vars()
-            .into_iter()
-            .filter(|v| {
-                ctx.find(|v2| v == v2)
-                    .map_or(true, |(_, ts)| !ts.ptype.vars().contains(v))
-            })
-            .collect();
-        let ts = TypeScheme {
-            ptype: expr_ty,
-            vars: tvars,
-        };
-
-        ctx.extend_one(var.clone(), ts);
-        let (mut ctx, body, body_ty, cs2) = self.check(&let_.body, ctx)?;
+        let pat = let_.pat.map(Variable::local);
+        let (rib, match_cs) = Self::match_pattern(&pat, expr_ty, &ctx)?;
+        ctx.extend(rib);
+        let (mut ctx, body, body_ty, body_cs) = self.check(&let_.body, ctx)?;
         ctx.shrink()?;
 
-        cs.append(cs2);
-        Ok((ctx, Let { var, expr, body }, body_ty, cs))
+        cs.append(body_cs);
+        cs.append(match_cs);
+        Ok((ctx, Let { pat, expr, body }, body_ty, cs))
     }
 
     fn check_tuple(&self, tuple: &ast::Tuple, ctx: Ctx) -> Result<(Ctx, Tuple, Type, ConstrSet)> {
@@ -429,7 +399,7 @@ impl TypeChecker {
         ))
     }
 
-    fn check_type(ast: &ast::Type) -> Result<Type> {
+    fn convert_type(ast: &ast::Type) -> Result<Type> {
         match ast {
             ast::Type::Unit => Ok(Type::Unit),
             ast::Type::Ident(ident) => match ident.as_ref() {
@@ -438,16 +408,97 @@ impl TypeChecker {
                 _ => Err(Error::TypeMismatch(format!("Unknown type {ident}"))),
             },
             ast::Type::Func(ty1, ty2) => Ok(Type::Func(
-                Box::new(Self::check_type(ty1)?),
-                Box::new(Self::check_type(ty2)?),
+                Box::new(Self::convert_type(ty1)?),
+                Box::new(Self::convert_type(ty2)?),
             )),
             ast::Type::Tuple(fst, snd, rest) => Ok(Type::Tuple(
-                Box::new(Self::check_type(fst)?),
-                Box::new(Self::check_type(snd)?),
+                Box::new(Self::convert_type(fst)?),
+                Box::new(Self::convert_type(snd)?),
                 rest.iter()
-                    .map(Self::check_type)
+                    .map(Self::convert_type)
                     .collect::<Result<Vec<_>>>()?,
             )),
+        }
+    }
+
+    fn match_pattern(
+        pat: &Pattern<Variable>,
+        expr_ty: Type,
+        ctx: &Ctx,
+    ) -> Result<(NonEmptyVec<(Variable, TypeScheme)>, ConstrSet)> {
+        match pat {
+            Pattern::Var(var) => {
+                // Only variables not bound in context can be
+                // universally quantified
+                let tvars = expr_ty
+                    .vars()
+                    .into_iter()
+                    .filter(|v| {
+                        ctx.find(|v2| v == v2)
+                            .map_or(true, |(_, ts)| !ts.ptype.vars().contains(v))
+                    })
+                    .collect();
+
+                let ts = TypeScheme {
+                    ptype: expr_ty,
+                    vars: tvars,
+                };
+
+                Ok((NonEmptyVec::new((var.clone(), ts)), ConstrSet::new()))
+            }
+            Pattern::Tuple(fst, snd, rest) => {
+                let (fst_ty, snd_ty, rest_ty, mut cs) = match expr_ty {
+                    Type::Var(var) => {
+                        // create principal tuple type
+                        let fst_ty = Type::Var(Variable::local("T"));
+                        let snd_ty = Type::Var(Variable::local("T"));
+                        let rest_ty = rest
+                            .iter()
+                            .map(|_| Type::Var(Variable::local("T")))
+                            .collect::<Vec<_>>();
+                        let tuple_ty = Type::Tuple(
+                            Box::new(fst_ty.clone()),
+                            Box::new(snd_ty.clone()),
+                            rest_ty.clone(),
+                        );
+
+                        // Add constraint that `var` is a tuple type
+                        let mut cs = ConstrSet::new();
+                        cs.add(Type::Var(var), tuple_ty);
+
+                        Ok((fst_ty, snd_ty, rest_ty, cs))
+                    }
+                    Type::Tuple(fst_ty, snd_ty, rest_ty) => {
+                        if rest.len() == rest_ty.len() {
+                            Ok((*fst_ty, *snd_ty, rest_ty, ConstrSet::new()))
+                        } else {
+                            Err(Error::PatternMatch(format!(
+                                "Tuple pattern has {} elements but expression type has {}",
+                                rest.len() + 2,
+                                rest_ty.len() + 2
+                            )))
+                        }
+                    }
+                    _ => Err(Error::PatternMatch(
+                        "Expression doesn't have a tuple type".to_string(),
+                    )),
+                }?;
+
+                let (mut matches, fst_cs) = Self::match_pattern(fst, fst_ty, ctx)?;
+                let (snd_matches, snd_cs) = Self::match_pattern(snd, snd_ty, ctx)?;
+                matches.extend(snd_matches);
+
+                cs.append(fst_cs);
+                cs.append(snd_cs);
+
+                for (pat, ty) in rest.iter().zip(rest_ty.into_iter()) {
+                    let (next_match, next_cs) = Self::match_pattern(pat, ty, ctx)?;
+                    matches.extend(next_match);
+                    cs.append(next_cs);
+                }
+
+                Ok((matches, cs))
+            }
         }
     }
 
@@ -889,7 +940,7 @@ mod test {
         let fv = term.free_vars();
         assert!(fv.is_empty());
 
-        if let TermKind::Let(Let { var: _, expr, body }) = &term.kind {
+        if let TermKind::Let(Let { pat: _, expr, body }) = &term.kind {
             let fv1 = expr.free_vars();
             assert!(fv1.is_empty());
 

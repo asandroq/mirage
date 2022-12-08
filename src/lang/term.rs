@@ -11,6 +11,8 @@ use std::{
 /// during evaluation.
 pub(crate) type Env = SharedList<(Variable, Rc<Term>)>;
 
+type Pattern = super::Pattern<Variable>;
+
 /// Kinds of terms of the language.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum TermKind {
@@ -57,7 +59,7 @@ impl fmt::Display for TermKind {
                 conseq,
                 alter,
             }) => write!(f, "if {cond} then {conseq} else {alter}"),
-            TermKind::Let(Let { var, expr, body }) => write!(f, "let {var} = {expr} in {body}"),
+            TermKind::Let(Let { pat, expr, body }) => write!(f, "let {pat} = {expr} in {body}"),
             TermKind::Tuple(Tuple { fst, snd, rest }) => {
                 write!(f, "({fst}, {snd}")?;
                 for t in rest {
@@ -119,12 +121,13 @@ impl Term {
                 fv1.extend(fv3.into_iter());
                 fv1
             }
-            TermKind::Let(Let { var, expr, body }) => {
-                let mut fv1 = expr.free_vars();
-                let mut fv2 = body.free_vars();
-                fv2.remove(var);
-                fv1.extend(fv2.into_iter());
-                fv1
+            TermKind::Let(Let { pat, expr, body }) => {
+                let pat_vars = pat.vars();
+                let body_vars = body.free_vars();
+                let mut expr_vars = expr.free_vars();
+
+                expr_vars.extend(body_vars.difference(&pat_vars).cloned());
+                expr_vars
             }
             TermKind::Tuple(Tuple { fst, snd, rest }) => {
                 let mut fv1 = fst.free_vars();
@@ -192,7 +195,7 @@ pub(crate) struct Lambda {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Let {
-    pub var: Variable,
+    pub pat: Pattern,
     pub expr: Rc<Term>,
     pub body: Rc<Term>,
 }

@@ -1,6 +1,8 @@
 use crate::collections::nonemptyvec::NonEmptyVec;
 use std::fmt;
 
+type Pattern = super::Pattern<String>;
+
 pub(crate) fn new_app(oper: Ast, args: NonEmptyVec<Ast>) -> AstBuilder {
     AstBuilder::new(AstKind::App(App::new(oper, args)))
 }
@@ -25,8 +27,8 @@ pub(crate) fn new_lambda(vars: NonEmptyVec<String>, body: Ast) -> AstBuilder {
     AstBuilder::new(AstKind::Lam(Lambda::new(vars, body)))
 }
 
-pub(crate) fn new_let(vars: NonEmptyVec<String>, expr: Ast, body: Ast) -> AstBuilder {
-    AstBuilder::new(AstKind::Let(Let::new(vars, expr, body)))
+pub(crate) fn new_let(pat: Pattern, expr: Ast, body: Ast) -> AstBuilder {
+    AstBuilder::new(AstKind::Let(Let::new(pat, expr, body)))
 }
 
 pub(crate) fn new_letrec(var: String, vty: Option<Type>, expr: Ast, body: Ast) -> AstBuilder {
@@ -188,13 +190,8 @@ impl fmt::Display for AstKind {
             }) => {
                 write!(f, "if {cond} then {conseq} else {alter}")
             }
-            Self::Let(Let { vars, expr, body }) => {
-                let (v, vs) = vars.parts();
-                write!(f, "let {v}")?;
-                for v in vs {
-                    write!(f, " {v}")?;
-                }
-                write!(f, " = {expr} in {body}")
+            Self::Let(Let { pat, expr, body }) => {
+                write!(f, "let {pat} = {expr} in {body}")
             }
             Self::Letrec(Letrec {
                 var, expr, body, ..
@@ -314,7 +311,7 @@ impl Lambda {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct Let {
     /// Variable bindings.
-    pub vars: NonEmptyVec<String>,
+    pub pat: Pattern,
 
     /// The expression to be assigned to the binding.
     pub expr: Box<Ast>,
@@ -324,9 +321,9 @@ pub(crate) struct Let {
 }
 
 impl Let {
-    pub(crate) fn new(vars: NonEmptyVec<String>, expr: Ast, body: Ast) -> Self {
+    pub(crate) fn new(pat: Pattern, expr: Ast, body: Ast) -> Self {
         Self {
-            vars,
+            pat,
             expr: Box::new(expr),
             body: Box::new(body),
         }

@@ -15,7 +15,8 @@ use crate::{
     error::{Error, Result},
 };
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{hash_map::Entry, HashMap, HashSet},
+    fmt,
     rc::Rc,
 };
 #[derive(Clone, Debug)]
@@ -105,5 +106,73 @@ impl Module {
         };
 
         Ok(Module { items })
+    }
+}
+
+/// Patterns for recursively binding variables.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Pattern<V> {
+    /// A single-variable pattern, always matches.
+    Var(V),
+
+    /// A pattern that matches a tuple.
+    Tuple(Box<Pattern<V>>, Box<Pattern<V>>, Vec<Pattern<V>>),
+}
+
+impl<V: fmt::Display> fmt::Display for Pattern<V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Pattern::Var(var) => var.fmt(f),
+            Pattern::Tuple(fst, snd, rest) => {
+                write!(f, "({fst}, {snd}")?;
+                for pat in rest {
+                    write!(f, ", {pat}")?;
+                }
+                write!(f, ")")
+            }
+        }
+    }
+}
+
+impl<V> Pattern<V> {
+    fn map<F, U>(&self, f: F) -> Pattern<U>
+    where
+        F: Copy + Fn(&V) -> U,
+    {
+        match self {
+            Pattern::Var(var) => Pattern::Var(f(var)),
+            Pattern::Tuple(fst, snd, rest) => {
+                let fst = fst.map(f);
+                let snd = snd.map(f);
+                let rest = rest.iter().map(|pat| pat.map(f)).collect();
+
+                Pattern::Tuple(Box::new(fst), Box::new(snd), rest)
+            }
+        }
+    }
+}
+
+impl<V> Pattern<V>
+where
+    V: Clone + Eq + ::std::hash::Hash,
+{
+    fn vars(&self) -> HashSet<V> {
+        match self {
+            Pattern::Var(var) => {
+                let mut set = HashSet::with_capacity(1);
+                set.insert(var.clone());
+                set
+            }
+            Pattern::Tuple(fst, snd, rest) => {
+                let mut set = fst.vars();
+                set.extend(snd.vars());
+
+                for pat in rest {
+                    set.extend(pat.vars());
+                }
+
+                set
+            }
+        }
     }
 }

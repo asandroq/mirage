@@ -5,8 +5,7 @@
  * to it without invalidating previous references to the old list.
  */
 
-use std::iter::FromIterator;
-use std::rc::Rc;
+use std::{iter::FromIterator, rc::Rc};
 
 /// A linked list with a shareable tail.
 #[derive(Debug, Eq, PartialEq)]
