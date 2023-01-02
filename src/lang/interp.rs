@@ -162,10 +162,9 @@ impl Interpreter {
                         Ok(Rc::clone(&rest[*index - 2]))
                     }
                 } else {
-                    Err(Error::RuntimeError(format!(
-                        "Cannot index non-tuple {:?}",
-                        v
-                    )))
+                    Err(Error::RuntimeError(
+                        format!("Cannot index non-tuple {v:?}",),
+                    ))
                 }
             }
             TermKind::BinOp(BinOp { oper, lhs, rhs }) => {
@@ -214,14 +213,12 @@ impl Interpreter {
                         }
                     } else {
                         Err(Error::RuntimeError(format!(
-                            "Right-hand side of operator is not an integer, it's {:?}",
-                            e2
+                            "Right-hand side of operator is not an integer, it's {e2:?}",
                         )))
                     }
                 } else {
                     Err(Error::RuntimeError(format!(
-                        "Left-hand side of operator is not an integer, it's {:?}",
-                        e1
+                        "Left-hand side of operator is not an integer, it's {e1:?}",
                     )))
                 }
             }

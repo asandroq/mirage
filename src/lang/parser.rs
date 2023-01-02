@@ -2,7 +2,7 @@
 
 use super::ast::{self, Ast, AstBuilder, AstKind, Error as AstError, Position, Type};
 use crate::collections::nonemptyvec::NonEmptyVec;
-use std::{borrow::Cow, fmt};
+use std::{borrow::Cow, collections::HashSet, fmt};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ErrorKind {
@@ -107,6 +107,10 @@ impl Token {
                 | Token::Pound
                 | Token::Unit
         )
+    }
+
+    fn starts_pattern(&self) -> bool {
+        matches!(self, Token::Ident(_) | Token::LParen)
     }
 }
 
@@ -877,8 +881,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             tok => Err(self.err(
                 ErrorKind::UnexpectedToken,
                 format!(
-                    "identifier, boolean, integer, '#' or '(' expected, but found {} instead",
-                    tok
+                    "identifier, boolean, integer, '#' or '(' expected, but found {tok} instead",
                 ),
             )),
         }
@@ -1033,45 +1036,84 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
     // pattern: variable
     //        | '(' pattern ',' pattern ...')'
     fn parse_pattern(&mut self) -> Result<Pattern> {
-        match self.peek_token()? {
-            Token::Ident(_) => {
-                let var = self.consume_identifier()?;
-                Ok(Pattern::Var(var))
-            }
-            Token::LParen => {
-                self.next_token()?;
-                let fst = self.parse_pattern()?;
-                self.consume_token(Token::Comma)?;
-                let snd = self.parse_pattern()?;
-
-                let mut rest = Vec::new();
-                loop {
-                    match self.peek_token()? {
-                        Token::Comma => {
-                            self.next_token()?;
-                            let pat = self.parse_pattern()?;
-                            rest.push(pat);
-                        }
-                        Token::RParen => {
-                            self.next_token()?;
-                            break;
-                        }
-                        tok => {
-                            return Err(self.err(
-                                ErrorKind::UnexpectedToken,
-                                format!("Unexpected token when reading tuple pattern: {tok}"),
-                            ))
-                        }
+        fn parse<J: Iterator<Item = char>>(
+            ps: &mut Parser<'_, J>,
+            seen: &mut HashSet<String>,
+        ) -> Result<Pattern> {
+            match ps.peek_token()? {
+                Token::Ident(_) => {
+                    let var = ps.consume_identifier()?;
+                    if seen.contains(&var) {
+                        Err(ps.err(
+                            ErrorKind::NonUniqueVariable,
+                            format!("Variable '{var}' appeared more than once in a pattern"),
+                        ))
+                    } else {
+                        seen.insert(var.clone());
+                        Ok(Pattern::Var(var))
                     }
                 }
+                Token::LParen => {
+                    ps.next_token()?;
+                    let fst = parse(ps, seen)?;
+                    ps.consume_token(Token::Comma)?;
+                    let snd = parse(ps, seen)?;
 
-                Ok(Pattern::Tuple(Box::new(fst), Box::new(snd), rest))
+                    let mut rest = Vec::new();
+                    loop {
+                        match ps.peek_token()? {
+                            Token::Comma => {
+                                ps.next_token()?;
+                                let pat = parse(ps, seen)?;
+                                rest.push(pat);
+                            }
+                            Token::RParen => {
+                                ps.next_token()?;
+                                break;
+                            }
+                            tok => {
+                                return Err(ps.err(
+                                    ErrorKind::UnexpectedToken,
+                                    format!("Unexpected token when reading tuple pattern: {tok}"),
+                                ))
+                            }
+                        }
+                    }
+
+                    Ok(Pattern::Tuple(Box::new(fst), Box::new(snd), rest))
+                }
+                tok => Err(ps.err(
+                    ErrorKind::UnexpectedToken,
+                    format!("Pattern expected, got {tok} instead"),
+                )),
             }
-            tok => Err(self.err(
-                ErrorKind::UnexpectedToken,
-                format!("Pattern expected, got {tok} instead"),
-            )),
         }
+
+        parse(self, &mut HashSet::new())
+    }
+
+    // pattern_seq: pattern ...
+    fn parse_pattern_seq(&mut self) -> Result<NonEmptyVec<Pattern>> {
+        let first = self.parse_pattern()?;
+        let mut seen = HashSet::new();
+        seen.extend(first.vars());
+
+        let mut pats = NonEmptyVec::new(first);
+        let mut tok = self.peek_token()?;
+        while tok.starts_pattern() {
+            let pat = self.parse_pattern()?;
+            let vars = pat.vars();
+            if let Some(var) = seen.intersection(&vars).next() {
+                return Err(self.err(
+                    ErrorKind::NonUniqueVariable,
+                    format!("Variable '{var}' appears more than once in a patterns"),
+                ));
+            }
+            pats.push(pat);
+            seen.extend(vars);
+            tok = self.peek_token()?;
+        }
+        Ok(pats)
     }
 
     fn parse_unique_identifiers(&mut self) -> Result<NonEmptyVec<String>> {
