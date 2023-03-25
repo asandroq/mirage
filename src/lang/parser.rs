@@ -108,10 +108,6 @@ impl Token {
                 | Token::Unit
         )
     }
-
-    fn starts_pattern(&self) -> bool {
-        matches!(self, Token::Ident(_) | Token::LParen)
-    }
 }
 
 impl fmt::Display for Token {
@@ -481,6 +477,24 @@ pub struct Parser<'ctx, I: Iterator<Item = char>> {
 
 type Pattern = super::Pattern<String>;
 
+/// Helper to facilitate creating parser errors.
+macro_rules! parse_error {
+    ($parser:ident, $kind:ident, $($args:tt)+) => {
+        $crate::lang::parser::Error {
+            kind: $crate::lang::parser::ErrorKind::$kind,
+            context: $parser.tokens.context.clone(),
+            position: $parser.position,
+            msg: match ::std::format_args!($($args)+) {
+                args => if let Some(msg) = args.as_str() {
+                    msg.into()
+                } else {
+                    ::std::fmt::format(args).into()
+                }
+            },
+        }
+    };
+}
+
 impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
     pub fn new(ctx: &'ctx mut ParserCtx, input: I, input_ctx: String) -> Parser<'ctx, I> {
         Parser {
@@ -503,15 +517,6 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             })
     }
 
-    fn err<S: Into<Cow<'static, str>>>(&self, kind: ErrorKind, msg: S) -> Error {
-        Error {
-            kind,
-            context: self.tokens.context.clone(),
-            position: self.position,
-            msg: msg.into(),
-        }
-    }
-
     fn fill(&mut self) -> Result<()> {
         if self.la.is_none() {
             let tok = self.tokens.next_token()?;
@@ -527,7 +532,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
 
         self.la
             .take()
-            .ok_or_else(|| self.err(ErrorKind::PrematureEnd, "premature end of input"))
+            .ok_or_else(|| parse_error!(self, PrematureEnd, "premature end of input"))
     }
 
     fn peek_token(&mut self) -> Result<Token> {
@@ -536,7 +541,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         self.la
             .as_ref()
             .cloned()
-            .ok_or_else(|| self.err(ErrorKind::PrematureEnd, "unexpected end of input"))
+            .ok_or_else(|| parse_error!(self, PrematureEnd, "unexpected end of input"))
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -545,9 +550,10 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         if t == tok {
             Ok(())
         } else {
-            Err(self.err(
-                ErrorKind::UnexpectedToken,
-                format!("expected {tok}, but got {t} instead"),
+            Err(parse_error!(
+                self,
+                UnexpectedToken,
+                "expected {tok}, but got {t} instead",
             ))
         }
     }
@@ -557,9 +563,10 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         if let Token::Ident(i) = t {
             Ok(i)
         } else {
-            Err(self.err(
-                ErrorKind::UnexpectedToken,
-                format!("identifier expected, but got {t} instead"),
+            Err(parse_error!(
+                self,
+                UnexpectedToken,
+                "identifier expected, but got {t} instead",
             ))
         }
     }
@@ -569,9 +576,10 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         if let Token::Int(i) = t {
             Ok(i)
         } else {
-            Err(self.err(
-                ErrorKind::UnexpectedToken,
-                format!("integer expected, but got {t} instead"),
+            Err(parse_error!(
+                self,
+                UnexpectedToken,
+                "integer expected, but got {t} instead",
             ))
         }
     }
@@ -581,9 +589,10 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         if let Token::Op(o) = t {
             Ok(o)
         } else {
-            Err(self.err(
-                ErrorKind::UnexpectedToken,
-                format!("operator expected, but got {t} instead"),
+            Err(parse_error!(
+                self,
+                UnexpectedToken,
+                "operator expected, but got {t} instead",
             ))
         }
     }
@@ -711,10 +720,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 .find(|(o, _)| *o == op)
                 .map(|(_, i)| i.clone())
                 .ok_or_else(|| {
-                    self.err(
-                        ErrorKind::UnknownOperator,
-                        format!("Unknown operator {op} found"),
-                    )
+                    parse_error!(self, UnknownOperator, "unknown operator {op} found",)
                 })?;
 
             if info.prec < min_prec {
@@ -736,9 +742,10 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             } = &rhs
             {
                 if op == *op2 && info.assoc == OpAssoc::None {
-                    return Err(self.err(
-                        ErrorKind::OperatorAssoc,
-                        format!("Operator {op2} is non-associative"),
+                    return Err(parse_error!(
+                        self,
+                        OperatorAssoc,
+                        "operator {op2} is non-associative",
                     ));
                 }
             }
@@ -762,9 +769,10 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             Token::Let => self.parse_let(),
             Token::Letrec => self.parse_letrec(),
             tok if tok.starts_atom() => self.parse_atom_expr(0),
-            tok => Err(self.err(
-                ErrorKind::UnexpectedToken,
-                format!("term expected, but got {tok} instead"),
+            tok => Err(parse_error!(
+                self,
+                UnexpectedToken,
+                "term expected, but got {tok} instead",
             )),
         }
     }
@@ -793,11 +801,10 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 let end = self.position;
 
                 if ident.starts_with('_') {
-                    Err(self.err(
-                        ErrorKind::UnexpectedToken,
-                        format!(
-                            "variable references starting with '_' are not allowed, but {ident} was found",
-                        ),
+                    Err(parse_error!(
+                        self,
+                        UnexpectedToken,
+                        "variable references starting with '_' are not allowed, but {ident} was found",
                     ))
                 } else {
                     self.build_ast(ast::new_var(ident).with_span(begin, end))
@@ -830,17 +837,19 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                                 rest.push(t);
                             }
                             tok => {
-                                return Err(self.err(
-                                    ErrorKind::UnexpectedToken,
-                                    format!("')' or ',' expected, but got {tok} instead"),
+                                return Err(parse_error!(
+                                    self,
+                                    UnexpectedToken,
+                                    "')' or ',' expected, but got {tok} instead",
                                 ))
                             }
                         }
                     }
                 } else {
-                    Err(self.err(
-                        ErrorKind::UnexpectedToken,
-                        format!("')' or ',' expected, but got {tok} instead"),
+                    Err(parse_error!(
+                        self,
+                        UnexpectedToken,
+                        "')' or ',' expected, but got {tok} instead",
                     ))
                 }
             }
@@ -872,17 +881,17 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                     #[allow(clippy::cast_sign_loss)]
                     self.build_ast(ast::new_tupleref(index as usize, tuple).with_span(begin, end))
                 } else {
-                    Err(self.err(
-                        ErrorKind::UnexpectedToken,
-                        format!("tuple accessor must be non-negative, but got {index} found"),
+                    Err(parse_error!(
+                        self,
+                        UnexpectedToken,
+                        "tuple accessor must be non-negative, but got {index} found",
                     ))
                 }
             }
-            tok => Err(self.err(
-                ErrorKind::UnexpectedToken,
-                format!(
-                    "identifier, boolean, integer, '#' or '(' expected, but found {tok} instead",
-                ),
+            tok => Err(parse_error!(
+                self,
+                UnexpectedToken,
+                "identifier, boolean, integer, '#' or '(' expected, but found {tok} instead",
             )),
         }
     }
@@ -919,17 +928,19 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                             rest.push(ty);
                         }
                         tok => {
-                            return Err(self.err(
-                                ErrorKind::UnexpectedToken,
-                                format!("')', or ',' expected, but got {tok} instead"),
+                            return Err(parse_error!(
+                                self,
+                                UnexpectedToken,
+                                "')', or ',' expected, but got {tok} instead",
                             ))
                         }
                     }
                 }
             }
-            tok => Err(self.err(
-                ErrorKind::UnexpectedToken,
-                format!("(), identifier or tuple expected, but got {tok} instead"),
+            tok => Err(parse_error!(
+                self,
+                UnexpectedToken,
+                "(), identifier or tuple expected, but got {tok} instead",
             )),
         }
     }
@@ -962,9 +973,10 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             if (0..=9).contains(&i) {
                 10 * i as u8
             } else {
-                return Err(self.err(
-                    ErrorKind::MalformedToken,
-                    format!("operator precedence must be between 0 and 9, but got {i} instead"),
+                return Err(parse_error!(
+                    self,
+                    MalformedToken,
+                    "operator precedence must be between 0 and 9, but got {i} instead",
                 ));
             }
         };
@@ -974,9 +986,10 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         loop {
             let op = self.consume_operator()?;
             if self.ctx.table.iter().any(|(o, _)| *o == op) {
-                return Err(self.err(
-                    ErrorKind::OperatorRedeclared,
-                    format!("operator {op} was already declared"),
+                return Err(parse_error!(
+                    self,
+                    OperatorRedeclared,
+                    "operator {op} was already declared",
                 ));
             }
             self.ctx.table.push((op, info.clone()));
@@ -1022,9 +1035,10 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 }
                 Token::End => break,
                 _ => {
-                    return Err(self.err(
-                        ErrorKind::UnexpectedToken,
-                        "Couldn't parse a module declaration".to_string(),
+                    return Err(parse_error!(
+                        self,
+                        UnexpectedToken,
+                        "Couldn't parse a module declaration",
                     ))
                 }
             }
@@ -1044,9 +1058,10 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 Token::Ident(_) => {
                     let var = ps.consume_identifier()?;
                     if seen.contains(&var) {
-                        Err(ps.err(
-                            ErrorKind::NonUniqueVariable,
-                            format!("Variable '{var}' appeared more than once in a pattern"),
+                        Err(parse_error!(
+                            ps,
+                            NonUniqueVariable,
+                            "variable '{var}' appeared more than once in a pattern",
                         ))
                     } else {
                         seen.insert(var.clone());
@@ -1072,9 +1087,10 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                                 break;
                             }
                             tok => {
-                                return Err(ps.err(
-                                    ErrorKind::UnexpectedToken,
-                                    format!("Unexpected token when reading tuple pattern: {tok}"),
+                                return Err(parse_error!(
+                                    ps,
+                                    UnexpectedToken,
+                                    "unexpected token when reading tuple pattern: {tok}",
                                 ))
                             }
                         }
@@ -1082,38 +1098,15 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
 
                     Ok(Pattern::Tuple(Box::new(fst), Box::new(snd), rest))
                 }
-                tok => Err(ps.err(
-                    ErrorKind::UnexpectedToken,
-                    format!("Pattern expected, got {tok} instead"),
+                tok => Err(parse_error!(
+                    ps,
+                    UnexpectedToken,
+                    "pattern expected, got {tok} instead",
                 )),
             }
         }
 
         parse(self, &mut HashSet::new())
-    }
-
-    // pattern_seq: pattern ...
-    fn parse_pattern_seq(&mut self) -> Result<NonEmptyVec<Pattern>> {
-        let first = self.parse_pattern()?;
-        let mut seen = HashSet::new();
-        seen.extend(first.vars());
-
-        let mut pats = NonEmptyVec::new(first);
-        let mut tok = self.peek_token()?;
-        while tok.starts_pattern() {
-            let pat = self.parse_pattern()?;
-            let vars = pat.vars();
-            if let Some(var) = seen.intersection(&vars).next() {
-                return Err(self.err(
-                    ErrorKind::NonUniqueVariable,
-                    format!("Variable '{var}' appears more than once in a patterns"),
-                ));
-            }
-            pats.push(pat);
-            seen.extend(vars);
-            tok = self.peek_token()?;
-        }
-        Ok(pats)
     }
 
     fn parse_unique_identifiers(&mut self) -> Result<NonEmptyVec<String>> {
@@ -1133,12 +1126,11 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         vars_.sort_unstable();
         for w in vars_.windows(2) {
             if w[0] == w[1] {
-                return Err(self.err(
-                    ErrorKind::NonUniqueVariable,
-                    format!(
-                        "Variable names must be unique but {} was given more than once",
-                        w[0]
-                    ),
+                return Err(parse_error!(
+                    self,
+                    NonUniqueVariable,
+                    "Variable names must be unique but {} was given more than once",
+                    w[0],
                 ));
             }
         }
