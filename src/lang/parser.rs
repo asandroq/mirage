@@ -1,28 +1,15 @@
 //! Parser for the Mirage language.
 
-use super::ast::{self, Ast, AstBuilder, AstKind, Error as AstError, Position, Type};
+use super::ast::{self, Ast, AstBuilder, AstKind, Position, Type};
 use crate::collections::nonemptyvec::NonEmptyVec;
 use std::{borrow::Cow, collections::HashSet, fmt};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum ErrorKind {
-    Ast(AstError),
-    MalformedToken,
-    NonUniqueVariable,
-    OperatorAssoc,
-    OperatorRedeclared,
-    PrematureEnd,
-    UnexpectedToken,
-    UnknownOperator,
-    UnrecognisedCharacter,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct Error {
-    kind: ErrorKind,
     context: String,
     position: Position,
     msg: Cow<'static, str>,
+    source: Option<Box<dyn std::error::Error + 'static>>,
 }
 
 impl fmt::Display for Error {
@@ -35,11 +22,9 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
-
-impl From<AstError> for ErrorKind {
-    fn from(err: AstError) -> Self {
-        Self::Ast(err)
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source.as_ref().map(Box::as_ref)
     }
 }
 
@@ -165,12 +150,12 @@ impl<I: Iterator<Item = char>> Lexer<I> {
         }
     }
 
-    fn err<S: Into<Cow<'static, str>>>(&self, kind: ErrorKind, msg: S) -> Error {
+    fn err<S: Into<Cow<'static, str>>>(&self, msg: S) -> Error {
         Error {
-            kind,
             context: self.context.clone(),
             position: self.position,
             msg: msg.into(),
+            source: None,
         }
     }
 
@@ -217,10 +202,7 @@ impl<I: Iterator<Item = char>> Lexer<I> {
         if res.chars().skip(1).all(is_name_char) {
             Ok(res)
         } else {
-            Err(self.err(
-                ErrorKind::MalformedToken,
-                format!("cannot parse {res} as a name"),
-            ))
+            Err(self.err(format!("cannot parse {res} as a name")))
         }
     }
 
@@ -239,12 +221,8 @@ impl<I: Iterator<Item = char>> Lexer<I> {
             }
         }
 
-        s.parse().map_err(|err| {
-            self.err(
-                ErrorKind::MalformedToken,
-                format!("cannot parse {s} as integer: {err}"),
-            )
-        })
+        s.parse()
+            .map_err(|err| self.err(format!("cannot parse {s} as integer: {err}")))
     }
 
     fn read_operator(&mut self, first: char) -> String {
@@ -400,12 +378,7 @@ impl<I: Iterator<Item = char>> Lexer<I> {
                     let op = self.read_operator(c);
                     return Ok(Token::Op(op));
                 }
-                c => {
-                    return Err(self.err(
-                        ErrorKind::UnrecognisedCharacter,
-                        format!("unrecognised character {c}"),
-                    ))
-                }
+                c => return Err(self.err(format!("unrecognised character {c}"))),
             }
         }
 
@@ -479,9 +452,8 @@ type Pattern = super::Pattern<String>;
 
 /// Helper to facilitate creating parser errors.
 macro_rules! parse_error {
-    ($parser:ident, $kind:ident, $($args:tt)+) => {
+    ($parser:ident, $($args:tt)+) => {
         $crate::lang::parser::Error {
-            kind: $crate::lang::parser::ErrorKind::$kind,
             context: $parser.tokens.context.clone(),
             position: $parser.position,
             msg: match ::std::format_args!($($args)+) {
@@ -491,6 +463,7 @@ macro_rules! parse_error {
                     ::std::fmt::format(args).into()
                 }
             },
+            source: None,
         }
     };
 }
@@ -510,10 +483,10 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             .with_context(&self.tokens.context)
             .build()
             .map_err(|err| Error {
-                kind: ErrorKind::from(err),
                 context: self.tokens.context.clone(),
                 position: self.position,
                 msg: "AST error".into(),
+                source: Some(Box::new(err)),
             })
     }
 
@@ -532,7 +505,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
 
         self.la
             .take()
-            .ok_or_else(|| parse_error!(self, PrematureEnd, "premature end of input"))
+            .ok_or_else(|| parse_error!(self, "premature end of input"))
     }
 
     fn peek_token(&mut self) -> Result<Token> {
@@ -541,7 +514,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         self.la
             .as_ref()
             .cloned()
-            .ok_or_else(|| parse_error!(self, PrematureEnd, "unexpected end of input"))
+            .ok_or_else(|| parse_error!(self, "unexpected end of input"))
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -550,11 +523,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         if t == tok {
             Ok(())
         } else {
-            Err(parse_error!(
-                self,
-                UnexpectedToken,
-                "expected {tok}, but got {t} instead",
-            ))
+            Err(parse_error!(self, "expected {tok}, but got {t} instead",))
         }
     }
 
@@ -565,7 +534,6 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         } else {
             Err(parse_error!(
                 self,
-                UnexpectedToken,
                 "identifier expected, but got {t} instead",
             ))
         }
@@ -576,11 +544,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         if let Token::Int(i) = t {
             Ok(i)
         } else {
-            Err(parse_error!(
-                self,
-                UnexpectedToken,
-                "integer expected, but got {t} instead",
-            ))
+            Err(parse_error!(self, "integer expected, but got {t} instead",))
         }
     }
 
@@ -589,11 +553,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         if let Token::Op(o) = t {
             Ok(o)
         } else {
-            Err(parse_error!(
-                self,
-                UnexpectedToken,
-                "operator expected, but got {t} instead",
-            ))
+            Err(parse_error!(self, "operator expected, but got {t} instead",))
         }
     }
 
@@ -719,9 +679,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 .iter()
                 .find(|(o, _)| *o == op)
                 .map(|(_, i)| i.clone())
-                .ok_or_else(|| {
-                    parse_error!(self, UnknownOperator, "unknown operator {op} found",)
-                })?;
+                .ok_or_else(|| parse_error!(self, "unknown operator {op} found",))?;
 
             if info.prec < min_prec {
                 break;
@@ -742,11 +700,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             } = &rhs
             {
                 if op == *op2 && info.assoc == OpAssoc::None {
-                    return Err(parse_error!(
-                        self,
-                        OperatorAssoc,
-                        "operator {op2} is non-associative",
-                    ));
+                    return Err(parse_error!(self, "operator {op2} is non-associative",));
                 }
             }
             let end = self.position;
@@ -769,11 +723,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             Token::Let => self.parse_let(),
             Token::Letrec => self.parse_letrec(),
             tok if tok.starts_atom() => self.parse_atom_expr(0),
-            tok => Err(parse_error!(
-                self,
-                UnexpectedToken,
-                "term expected, but got {tok} instead",
-            )),
+            tok => Err(parse_error!(self, "term expected, but got {tok} instead",)),
         }
     }
 
@@ -803,7 +753,6 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 if ident.starts_with('_') {
                     Err(parse_error!(
                         self,
-                        UnexpectedToken,
                         "variable references starting with '_' are not allowed, but {ident} was found",
                     ))
                 } else {
@@ -839,7 +788,6 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                             tok => {
                                 return Err(parse_error!(
                                     self,
-                                    UnexpectedToken,
                                     "')' or ',' expected, but got {tok} instead",
                                 ))
                             }
@@ -848,7 +796,6 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 } else {
                     Err(parse_error!(
                         self,
-                        UnexpectedToken,
                         "')' or ',' expected, but got {tok} instead",
                     ))
                 }
@@ -883,14 +830,12 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 } else {
                     Err(parse_error!(
                         self,
-                        UnexpectedToken,
                         "tuple accessor must be non-negative, but got {index} found",
                     ))
                 }
             }
             tok => Err(parse_error!(
                 self,
-                UnexpectedToken,
                 "identifier, boolean, integer, '#' or '(' expected, but found {tok} instead",
             )),
         }
@@ -930,7 +875,6 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                         tok => {
                             return Err(parse_error!(
                                 self,
-                                UnexpectedToken,
                                 "')', or ',' expected, but got {tok} instead",
                             ))
                         }
@@ -939,7 +883,6 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             }
             tok => Err(parse_error!(
                 self,
-                UnexpectedToken,
                 "(), identifier or tuple expected, but got {tok} instead",
             )),
         }
@@ -975,7 +918,6 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             } else {
                 return Err(parse_error!(
                     self,
-                    MalformedToken,
                     "operator precedence must be between 0 and 9, but got {i} instead",
                 ));
             }
@@ -986,11 +928,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         loop {
             let op = self.consume_operator()?;
             if self.ctx.table.iter().any(|(o, _)| *o == op) {
-                return Err(parse_error!(
-                    self,
-                    OperatorRedeclared,
-                    "operator {op} was already declared",
-                ));
+                return Err(parse_error!(self, "operator {op} was already declared",));
             }
             self.ctx.table.push((op, info.clone()));
 
@@ -1034,13 +972,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                     module.decls.push((idents, term));
                 }
                 Token::End => break,
-                _ => {
-                    return Err(parse_error!(
-                        self,
-                        UnexpectedToken,
-                        "Couldn't parse a module declaration",
-                    ))
-                }
+                _ => return Err(parse_error!(self, "Couldn't parse a module declaration",)),
             }
         }
 
@@ -1060,7 +992,6 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                     if seen.contains(&var) {
                         Err(parse_error!(
                             ps,
-                            NonUniqueVariable,
                             "variable '{var}' appeared more than once in a pattern",
                         ))
                     } else {
@@ -1089,7 +1020,6 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                             tok => {
                                 return Err(parse_error!(
                                     ps,
-                                    UnexpectedToken,
                                     "unexpected token when reading tuple pattern: {tok}",
                                 ))
                             }
@@ -1098,11 +1028,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
 
                     Ok(Pattern::Tuple(Box::new(fst), Box::new(snd), rest))
                 }
-                tok => Err(parse_error!(
-                    ps,
-                    UnexpectedToken,
-                    "pattern expected, got {tok} instead",
-                )),
+                tok => Err(parse_error!(ps, "pattern expected, got {tok} instead",)),
             }
         }
 
@@ -1128,7 +1054,6 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
             if w[0] == w[1] {
                 return Err(parse_error!(
                     self,
-                    NonUniqueVariable,
                     "Variable names must be unique but {} was given more than once",
                     w[0],
                 ));
@@ -1152,61 +1077,82 @@ mod tests {
                  in f false;
         "#;
         let mut lexer = Lexer::new(input.chars(), "tests".to_string());
-        assert_eq!(lexer.next_token(), Ok(Token::Let));
-        assert_eq!(lexer.next_token(), Ok(Token::Ident("_23all".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::Equals));
-        assert_eq!(lexer.next_token(), Ok(Token::Int(-23)));
-        assert_eq!(lexer.next_token(), Ok(Token::Op("<**>".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::Int(5)));
-        assert_eq!(lexer.next_token(), Ok(Token::Op(">>=".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::Int(9)));
-        assert_eq!(lexer.next_token(), Ok(Token::Op("+".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::Int(8)));
-        assert_eq!(lexer.next_token(), Ok(Token::Op("/".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::Int(7)));
-        assert_eq!(lexer.next_token(), Ok(Token::Op("-".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::Int(99)));
-        assert_eq!(lexer.next_token(), Ok(Token::In));
-        assert_eq!(lexer.next_token(), Ok(Token::Let));
-        assert_eq!(lexer.next_token(), Ok(Token::Ident("w0w".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::Equals));
-        assert_eq!(lexer.next_token(), Ok(Token::Ident("_23all".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::Op("<".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::Int(-48)));
-        assert_eq!(lexer.next_token(), Ok(Token::Op("<=>".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::LParen));
-        assert_eq!(lexer.next_token(), Ok(Token::Int(888)));
-        assert_eq!(lexer.next_token(), Ok(Token::Comma));
-        assert_eq!(lexer.next_token(), Ok(Token::Bool(false)));
-        assert_eq!(lexer.next_token(), Ok(Token::Comma));
-        assert_eq!(lexer.next_token(), Ok(Token::Int(-6583)));
-        assert_eq!(lexer.next_token(), Ok(Token::RParen));
-        assert_eq!(lexer.next_token(), Ok(Token::In));
-        assert_eq!(lexer.next_token(), Ok(Token::Let));
-        assert_eq!(lexer.next_token(), Ok(Token::Ident("f".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::Colon));
-        assert_eq!(lexer.next_token(), Ok(Token::Ident("Bool".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::Arrow));
-        assert_eq!(lexer.next_token(), Ok(Token::Ident("Bool".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::Equals));
-        assert_eq!(lexer.next_token(), Ok(Token::Backslash));
-        assert_eq!(lexer.next_token(), Ok(Token::Ident("x".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::Colon));
-        assert_eq!(lexer.next_token(), Ok(Token::Ident("Bool".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::ThickArrow));
-        assert_eq!(lexer.next_token(), Ok(Token::If));
-        assert_eq!(lexer.next_token(), Ok(Token::Ident("x".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::Op("==".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::Bool(true)));
-        assert_eq!(lexer.next_token(), Ok(Token::Then));
-        assert_eq!(lexer.next_token(), Ok(Token::Ident("y2_y".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::Else));
-        assert_eq!(lexer.next_token(), Ok(Token::Ident("zyu2ii".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::In));
-        assert_eq!(lexer.next_token(), Ok(Token::Ident("f".to_string())));
-        assert_eq!(lexer.next_token(), Ok(Token::Bool(false)));
-        assert_eq!(lexer.next_token(), Ok(Token::SemiColon));
-        assert_eq!(lexer.next_token(), Ok(Token::End));
+        assert_eq!(lexer.next_token().unwrap(), Token::Let);
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Ident("_23all".to_string())
+        );
+        assert_eq!(lexer.next_token().unwrap(), Token::Equals);
+        assert_eq!(lexer.next_token().unwrap(), Token::Int(-23));
+        assert_eq!(lexer.next_token().unwrap(), Token::Op("<**>".to_string()));
+        assert_eq!(lexer.next_token().unwrap(), Token::Int(5));
+        assert_eq!(lexer.next_token().unwrap(), Token::Op(">>=".to_string()));
+        assert_eq!(lexer.next_token().unwrap(), Token::Int(9));
+        assert_eq!(lexer.next_token().unwrap(), Token::Op("+".to_string()));
+        assert_eq!(lexer.next_token().unwrap(), Token::Int(8));
+        assert_eq!(lexer.next_token().unwrap(), Token::Op("/".to_string()));
+        assert_eq!(lexer.next_token().unwrap(), Token::Int(7));
+        assert_eq!(lexer.next_token().unwrap(), Token::Op("-".to_string()));
+        assert_eq!(lexer.next_token().unwrap(), Token::Int(99));
+        assert_eq!(lexer.next_token().unwrap(), Token::In);
+        assert_eq!(lexer.next_token().unwrap(), Token::Let);
+        assert_eq!(lexer.next_token().unwrap(), Token::Ident("w0w".to_string()));
+        assert_eq!(lexer.next_token().unwrap(), Token::Equals);
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Ident("_23all".to_string())
+        );
+        assert_eq!(lexer.next_token().unwrap(), Token::Op("<".to_string()));
+        assert_eq!(lexer.next_token().unwrap(), Token::Int(-48));
+        assert_eq!(lexer.next_token().unwrap(), Token::Op("<=>".to_string()));
+        assert_eq!(lexer.next_token().unwrap(), Token::LParen);
+        assert_eq!(lexer.next_token().unwrap(), Token::Int(888));
+        assert_eq!(lexer.next_token().unwrap(), Token::Comma);
+        assert_eq!(lexer.next_token().unwrap(), Token::Bool(false));
+        assert_eq!(lexer.next_token().unwrap(), Token::Comma);
+        assert_eq!(lexer.next_token().unwrap(), Token::Int(-6583));
+        assert_eq!(lexer.next_token().unwrap(), Token::RParen);
+        assert_eq!(lexer.next_token().unwrap(), Token::In);
+        assert_eq!(lexer.next_token().unwrap(), Token::Let);
+        assert_eq!(lexer.next_token().unwrap(), Token::Ident("f".to_string()));
+        assert_eq!(lexer.next_token().unwrap(), Token::Colon);
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Ident("Bool".to_string())
+        );
+        assert_eq!(lexer.next_token().unwrap(), Token::Arrow);
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Ident("Bool".to_string())
+        );
+        assert_eq!(lexer.next_token().unwrap(), Token::Equals);
+        assert_eq!(lexer.next_token().unwrap(), Token::Backslash);
+        assert_eq!(lexer.next_token().unwrap(), Token::Ident("x".to_string()));
+        assert_eq!(lexer.next_token().unwrap(), Token::Colon);
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Ident("Bool".to_string())
+        );
+        assert_eq!(lexer.next_token().unwrap(), Token::ThickArrow);
+        assert_eq!(lexer.next_token().unwrap(), Token::If);
+        assert_eq!(lexer.next_token().unwrap(), Token::Ident("x".to_string()));
+        assert_eq!(lexer.next_token().unwrap(), Token::Op("==".to_string()));
+        assert_eq!(lexer.next_token().unwrap(), Token::Bool(true));
+        assert_eq!(lexer.next_token().unwrap(), Token::Then);
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Ident("y2_y".to_string())
+        );
+        assert_eq!(lexer.next_token().unwrap(), Token::Else);
+        assert_eq!(
+            lexer.next_token().unwrap(),
+            Token::Ident("zyu2ii".to_string())
+        );
+        assert_eq!(lexer.next_token().unwrap(), Token::In);
+        assert_eq!(lexer.next_token().unwrap(), Token::Ident("f".to_string()));
+        assert_eq!(lexer.next_token().unwrap(), Token::Bool(false));
+        assert_eq!(lexer.next_token().unwrap(), Token::SemiColon);
+        assert_eq!(lexer.next_token().unwrap(), Token::End);
     }
 
     fn parse_str(s: &str) -> Result<()> {
