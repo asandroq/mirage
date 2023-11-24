@@ -75,7 +75,7 @@ impl<T> NonEmptyVec<T> {
     /// Convers this collection into a standard vector.
     pub fn into_vec(self) -> Vec<T> {
         let mut res = vec![*self.elem];
-        res.extend(self.rest.into_iter());
+        res.extend(self.rest);
 
         res
     }
@@ -182,7 +182,7 @@ mod test {
     fn test_extend() {
         let mut coll = NonEmptyVec::new("the");
         let other = vec!["book", "is", "on", "the", "table"];
-        coll.extend(other.into_iter());
+        coll.extend(other);
 
         let mut iter = coll.into_iter();
         assert_eq!(iter.next(), Some("the"));
@@ -198,7 +198,7 @@ mod test {
     fn test_map() {
         let mut coll = NonEmptyVec::new("the");
         let other = vec!["book", "is", "on", "the", "table"];
-        coll.extend(other.into_iter());
+        coll.extend(other);
 
         let coll_ = coll.map(str::len);
         let mut iter = coll_.into_iter();
@@ -215,11 +215,11 @@ mod test {
     fn test_zip() {
         let mut coll1 = NonEmptyVec::new('x');
         let other1 = vec!['y', 'z', 'u', 'v', 'w'];
-        coll1.extend(other1.into_iter());
+        coll1.extend(other1);
 
         let mut coll2 = NonEmptyVec::new(9);
         let other2 = vec![0, 14, 9, 3, 16];
-        coll2.extend(other2.into_iter());
+        coll2.extend(other2);
 
         let coll3 = coll1.zip(coll2);
         let mut iter = coll3.into_iter();

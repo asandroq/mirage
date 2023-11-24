@@ -301,7 +301,7 @@ fn lookup(var: &Variable, env: &Env) -> Result<Rc<Term>> {
         .ok_or_else(|| Error::RuntimeError(format!("Variable {var} not found in environment")))
 }
 
-const PRELUDE: &str = r#"
+const PRELUDE: &str = r"
 infix 6 <,==;
 infixl 8 +,-;
 infixl 9 *,/;
@@ -309,7 +309,7 @@ infixl 9 *,/;
 let id x = x;
 
 let twice f x = f (f x);
-"#;
+";
 
 #[cfg(test)]
 mod test {
@@ -331,15 +331,15 @@ mod test {
 
     #[test]
     fn test_eval() -> Result<()> {
-        let i1 = r#"
+        let i1 = r"
            let a = (-5411, (), true, 42)
            in let f = \x => if #2(x) then #3(x) else #0(x)
               in f a
-        "#;
+        ";
         let t1 = eval_str(i1)?;
         assert!(matches!(t1.kind, TermKind::Int(i) if i == 42));
 
-        let i2 = r#"
+        let i2 = r"
            letrec f : (Bool, Bool, Bool) -> (Bool, Bool, Bool) = \a =>
                  if #2(a)
                     then f (true, true, false)
@@ -349,7 +349,7 @@ mod test {
                                  then f (false, false, false)
                                  else (false, false, false)
               in f (true, true, true)
-        "#;
+        ";
         let t2 = eval_str(i2)?;
         let tfalse = Rc::new(Term {
             kind: TermKind::Bool(false),
@@ -368,7 +368,7 @@ mod test {
             panic!("Result of evaluation is not a tuple")
         };
 
-        let i3 = r#"
+        let i3 = r"
            infix 6 <;
            infixl 8 -;
            infixl 9 *;
@@ -379,7 +379,7 @@ mod test {
                     else go (#0(t) - 1, #0(t) * #1(t))
               in go (n, 1)
            in fact 6
-        "#;
+        ";
         let t3 = eval_str(i3)?;
         assert!(matches!(t3.kind, TermKind::Int(i) if i == 720));
 
@@ -388,7 +388,7 @@ mod test {
 
     #[test]
     fn test_poly() -> Result<()> {
-        let input = r#"
+        let input = r"
            infixl 8 +;
            let id = \a => a
            in let twice = \f a => f (f a)
@@ -397,7 +397,7 @@ mod test {
                     in if twice not (id false)
                        then id (twice inc 3)
                        else twice inc (id 7)
-        "#;
+        ";
 
         let res = eval_str(input)?;
         assert_eq!(res.kind, TermKind::Int(9),);

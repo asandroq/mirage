@@ -3,11 +3,15 @@ use std::fmt;
 
 type Pattern = super::Pattern<String>;
 
-pub(crate) fn new_app(oper: Ast, args: NonEmptyVec<Ast>) -> AstBuilder {
+pub(crate) fn new_app(oper: impl Into<Box<Ast>>, args: NonEmptyVec<Ast>) -> AstBuilder {
     AstBuilder::new(AstKind::App(App::new(oper, args)))
 }
 
-pub(crate) fn new_binop(oper: String, lhs: Ast, rhs: Ast) -> AstBuilder {
+pub(crate) fn new_binop(
+    oper: String,
+    lhs: impl Into<Box<Ast>>,
+    rhs: impl Into<Box<Ast>>,
+) -> AstBuilder {
     AstBuilder::new(AstKind::BinOp(BinOp::new(oper, lhs, rhs)))
 }
 
@@ -15,7 +19,11 @@ pub(crate) fn new_bool(val: bool) -> AstBuilder {
     AstBuilder::new(AstKind::Bool(val))
 }
 
-pub(crate) fn new_if(cond: Ast, conseq: Ast, alter: Ast) -> AstBuilder {
+pub(crate) fn new_if(
+    cond: impl Into<Box<Ast>>,
+    conseq: impl Into<Box<Ast>>,
+    alter: impl Into<Box<Ast>>,
+) -> AstBuilder {
     AstBuilder::new(AstKind::If(If::new(cond, conseq, alter)))
 }
 
@@ -23,23 +31,36 @@ pub(crate) fn new_int(val: i64) -> AstBuilder {
     AstBuilder::new(AstKind::Int(val))
 }
 
-pub(crate) fn new_lambda(vars: NonEmptyVec<String>, body: Ast) -> AstBuilder {
+pub(crate) fn new_lambda(vars: NonEmptyVec<String>, body: impl Into<Box<Ast>>) -> AstBuilder {
     AstBuilder::new(AstKind::Lam(Lambda::new(vars, body)))
 }
 
-pub(crate) fn new_let(pat: Pattern, expr: Ast, body: Ast) -> AstBuilder {
+pub(crate) fn new_let(
+    pat: Pattern,
+    expr: impl Into<Box<Ast>>,
+    body: impl Into<Box<Ast>>,
+) -> AstBuilder {
     AstBuilder::new(AstKind::Let(Let::new(pat, expr, body)))
 }
 
-pub(crate) fn new_letrec(var: String, vty: Option<Type>, expr: Ast, body: Ast) -> AstBuilder {
+pub(crate) fn new_letrec(
+    var: String,
+    vty: Option<Type>,
+    expr: impl Into<Box<Ast>>,
+    body: impl Into<Box<Ast>>,
+) -> AstBuilder {
     AstBuilder::new(AstKind::Letrec(Letrec::new(var, vty, expr, body)))
 }
 
-pub(crate) fn new_tuple(fst: Ast, snd: Ast, rest: Vec<Ast>) -> AstBuilder {
+pub(crate) fn new_tuple(
+    fst: impl Into<Box<Ast>>,
+    snd: impl Into<Box<Ast>>,
+    rest: Vec<Ast>,
+) -> AstBuilder {
     AstBuilder::new(AstKind::Tuple(Tuple::new(fst, snd, rest)))
 }
 
-pub(crate) fn new_tupleref(index: usize, tuple: Ast) -> AstBuilder {
+pub(crate) fn new_tupleref(index: usize, tuple: impl Into<Box<Ast>>) -> AstBuilder {
     AstBuilder::new(AstKind::TupleRef(TupleRef::new(index, tuple)))
 }
 
@@ -226,9 +247,9 @@ pub(crate) struct App {
 }
 
 impl App {
-    pub(crate) fn new(oper: Ast, args: NonEmptyVec<Ast>) -> Self {
+    pub(crate) fn new(oper: impl Into<Box<Ast>>, args: NonEmptyVec<Ast>) -> Self {
         Self {
-            oper: Box::new(oper),
+            oper: oper.into(),
             args,
         }
     }
@@ -251,11 +272,11 @@ pub(crate) struct BinOp {
 }
 
 impl BinOp {
-    pub(crate) fn new(oper: String, lhs: Ast, rhs: Ast) -> Self {
+    pub(crate) fn new(oper: String, lhs: impl Into<Box<Ast>>, rhs: impl Into<Box<Ast>>) -> Self {
         Self {
             oper,
-            lhs: Box::new(lhs),
-            rhs: Box::new(rhs),
+            lhs: lhs.into(),
+            rhs: rhs.into(),
         }
     }
 }
@@ -274,11 +295,15 @@ pub(crate) struct If {
 }
 
 impl If {
-    pub(crate) fn new(cond: Ast, conseq: Ast, alter: Ast) -> Self {
+    pub(crate) fn new(
+        cond: impl Into<Box<Ast>>,
+        conseq: impl Into<Box<Ast>>,
+        alter: impl Into<Box<Ast>>,
+    ) -> Self {
         Self {
-            cond: Box::new(cond),
-            conseq: Box::new(conseq),
-            alter: Box::new(alter),
+            cond: cond.into(),
+            conseq: conseq.into(),
+            alter: alter.into(),
         }
     }
 }
@@ -294,10 +319,10 @@ pub(crate) struct Lambda {
 }
 
 impl Lambda {
-    pub(crate) fn new(vars: NonEmptyVec<String>, body: Ast) -> Self {
+    pub(crate) fn new(vars: NonEmptyVec<String>, body: impl Into<Box<Ast>>) -> Self {
         Self {
             vars,
-            body: Box::new(body),
+            body: body.into(),
         }
     }
 }
@@ -321,11 +346,11 @@ pub(crate) struct Let {
 }
 
 impl Let {
-    pub(crate) fn new(pat: Pattern, expr: Ast, body: Ast) -> Self {
+    pub(crate) fn new(pat: Pattern, expr: impl Into<Box<Ast>>, body: impl Into<Box<Ast>>) -> Self {
         Self {
             pat,
-            expr: Box::new(expr),
-            body: Box::new(body),
+            expr: expr.into(),
+            body: body.into(),
         }
     }
 }
@@ -350,12 +375,17 @@ pub(crate) struct Letrec {
 }
 
 impl Letrec {
-    pub(crate) fn new(var: String, vty: Option<Type>, expr: Ast, body: Ast) -> Self {
+    pub(crate) fn new(
+        var: String,
+        vty: Option<Type>,
+        expr: impl Into<Box<Ast>>,
+        body: impl Into<Box<Ast>>,
+    ) -> Self {
         Self {
             var,
             vty,
-            expr: Box::new(expr),
-            body: Box::new(body),
+            expr: expr.into(),
+            body: body.into(),
         }
     }
 }
@@ -377,10 +407,10 @@ pub(crate) struct Tuple {
 }
 
 impl Tuple {
-    pub(crate) fn new(fst: Ast, snd: Ast, rest: Vec<Ast>) -> Self {
+    pub(crate) fn new(fst: impl Into<Box<Ast>>, snd: impl Into<Box<Ast>>, rest: Vec<Ast>) -> Self {
         Self {
-            fst: Box::new(fst),
-            snd: Box::new(snd),
+            fst: fst.into(),
+            snd: snd.into(),
             rest,
         }
     }
@@ -400,10 +430,10 @@ pub(crate) struct TupleRef {
 }
 
 impl TupleRef {
-    pub(crate) fn new(index: usize, tuple: Ast) -> Self {
+    pub(crate) fn new(index: usize, tuple: impl Into<Box<Ast>>) -> Self {
         Self {
             index,
-            tuple: Box::new(tuple),
+            tuple: tuple.into(),
         }
     }
 }

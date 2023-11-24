@@ -1070,12 +1070,12 @@ mod tests {
 
     #[test]
     fn test_lexer() {
-        let input = r#"
+        let input = r"
            let _23all = -23 <**>5 >>= 9+ 8 / 7 - 99
            in let w0w = _23all < -48 <=>(888,false, -6583)
               in let f : Bool -> Bool = \x : Bool => if x == true then y2_y else zyu2ii
                  in f false;
-        "#;
+        ";
         let mut lexer = Lexer::new(input.chars(), "tests".to_string());
         assert_eq!(lexer.next_token().unwrap(), Token::Let);
         assert_eq!(
@@ -1165,17 +1165,17 @@ mod tests {
 
     #[test]
     fn test_parser() -> Result<()> {
-        parse_str(r#"let f = \x => if g x then gg y2_y else hh zyu2ii in f false"#)?;
-        parse_str(r#"let x = (\a => (if a then (b c d) else z)) in x ((a a))"#)?;
-        parse_str(r#"let f = \_ => let x = false in if x then false else true in f ()"#)?;
-        parse_str(r#"let h = \x y z => if y then x else z in h 42 false 39"#)?;
+        parse_str(r"let f = \x => if g x then gg y2_y else hh zyu2ii in f false")?;
+        parse_str(r"let x = (\a => (if a then (b c d) else z)) in x ((a a))")?;
+        parse_str(r"let f = \_ => let x = false in if x then false else true in f ()")?;
+        parse_str(r"let h = \x y z => if y then x else z in h 42 false 39")?;
 
-        let input = r#"
+        let input = r"
            let f = \x y => if (x y) then 42 else -998
            in let z = -132
               in let g = \_ => true
                  in f g z
-        "#;
+        ";
 
         parse_str(input)?;
 
@@ -1184,44 +1184,44 @@ mod tests {
 
     #[test]
     fn test_parse_tuple() -> Result<()> {
-        let input = r#"
+        let input = r"
            let x = (false, (), -526)
            in let y = ((), 42191, if true then 0 else 1)
               in let g = \t => if false then t else (true, (), 0)
                  in g x
-        "#;
+        ";
         parse_str(input)?;
 
-        let input = r#"
+        let input = r"
            let x = ((), false, -99, (), 42)
               in let a = #0(x)
                 in let b = #2(x)
                   in (a, b)
-        "#;
+        ";
         parse_str(input)
     }
 
     #[test]
     fn test_parse_exp() -> Result<()> {
-        let input = r#"
+        let input = r"
            infix 6 <,==;
            infixl 8 +,-;
            infixl 9 *,/;
            let t = abac + 76 *x_3pill - 11 < 91* 3+j
               in t - 14/9 == t+ 78 * 1 + 44
-        "#;
+        ";
 
         parse_str(input)
     }
 
     #[test]
     fn test_parse_pattern() -> Result<()> {
-        let input = r#"
+        let input = r"
             let my_var = 2
                in let (v1, v2) = (false, 99)
                      in let (v1, v2, a, b, c) = (1, 1, 1, 1, 1)
                            in let (a, (b, c, d), e, f) = (1, (1, 1, 1), 1, 1) in ()
-        "#;
+        ";
         parse_str(input)
     }
 

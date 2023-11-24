@@ -117,8 +117,8 @@ impl Term {
                 let mut fv1 = cond.free_vars();
                 let fv2 = conseq.free_vars();
                 let fv3 = alter.free_vars();
-                fv1.extend(fv2.into_iter());
-                fv1.extend(fv3.into_iter());
+                fv1.extend(fv2);
+                fv1.extend(fv3);
                 fv1
             }
             TermKind::Let(Let { pat, expr, body }) => {
@@ -133,7 +133,7 @@ impl Term {
                 let mut fv1 = fst.free_vars();
                 let fv2 = snd.free_vars();
                 let fvs = rest.iter().flat_map(|t| t.free_vars().into_iter());
-                fv1.extend(fv2.into_iter());
+                fv1.extend(fv2);
                 fv1.extend(fvs);
                 fv1
             }
@@ -141,7 +141,7 @@ impl Term {
             TermKind::BinOp(BinOp { oper: _, lhs, rhs }) => {
                 let mut lfv = lhs.free_vars();
                 let rfv = rhs.free_vars();
-                lfv.extend(rfv.into_iter());
+                lfv.extend(rfv);
                 lfv
             }
         }

@@ -625,15 +625,15 @@ impl Type {
             Type::Func(ty1, ty2) => {
                 let mut s1 = ty1.vars();
                 let s2 = ty2.vars();
-                s1.extend(s2.into_iter());
+                s1.extend(s2);
                 s1
             }
             Type::Tuple(f, s, r) => {
                 let mut fv = f.vars();
                 let sv = s.vars();
                 let rv = r.iter().flat_map(Type::vars).collect::<HashSet<_>>();
-                fv.extend(sv.into_iter());
-                fv.extend(rv.into_iter());
+                fv.extend(sv);
+                fv.extend(rv);
                 fv
             }
             Type::Var(v) => {
@@ -870,32 +870,32 @@ mod test {
         assert_eq!(typecheck_str("if false then true else false")?, Type::Bool);
 
         assert!(matches!(
-            typecheck_str(r#"if true then \x => false else \z => true"#)?,
+            typecheck_str(r"if true then \x => false else \z => true")?,
             Type::Func(_, _)
         ));
 
-        let input = r#"
+        let input = r"
            let x = false
            in let y = true
               in let z = false
                  in let and = \x y => if x then y else x
                     in if and x y then y else z
-         "#;
+         ";
         assert_eq!(typecheck_str(input)?, Type::Bool);
 
-        let unit = r#"
+        let unit = r"
            let f = \_ => false
            in let g = \x => if x then () else ()
               in g (f ())
-        "#;
+        ";
         assert_eq!(typecheck_str(unit)?, Type::Unit);
 
-        let int = r#"
+        let int = r"
            let f = \x y => if (x y) then 42 else -998
            in let z = -132
               in let g = \_ => true
                  in f g z
-        "#;
+        ";
         assert_eq!(typecheck_str(int)?, Type::Int);
 
         Ok(())
@@ -903,21 +903,21 @@ mod test {
 
     #[test]
     fn test_typecheck_tuple() -> Result<()> {
-        let tuple1 = r#"
+        let tuple1 = r"
            let x = (false, (), -526)
            in let y = ((), 42191, if true then 0 else 1)
               in let g = \t => if false then t else (true, (), 0)
                  in g x
-        "#;
+        ";
         assert_eq!(
             typecheck_str(tuple1)?,
             Type::Tuple(Box::new(Type::Bool), Box::new(Type::Unit), vec![Type::Int])
         );
 
-        let tuple2 = r#"
+        let tuple2 = r"
            let f = \x => if #2(x) then #3(x) else #0(x)
            in f (-12132, (), true, 77)
-        "#;
+        ";
         assert_eq!(typecheck_str(tuple2)?, Type::Int);
 
         Ok(())
@@ -925,11 +925,11 @@ mod test {
 
     #[test]
     fn test_free_vars() -> Result<()> {
-        let input = r#"
+        let input = r"
            let f = \a => \b => a b
            in letrec g = \a => if true then g a else f g a
               in ()
-        "#;
+        ";
 
         let mut ctx = ParserCtx::new();
         let mut parser = Parser::new(&mut ctx, input.chars(), "tests".to_string());

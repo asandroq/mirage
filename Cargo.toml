@@ -5,5 +5,5 @@ authors = ["Alex Silva <alex@unendli.ch>"]
 edition = "2021"
 
 [dependencies]
-rustyline = "11.0"
+rustyline = "12.0"
 thiserror = "1"
