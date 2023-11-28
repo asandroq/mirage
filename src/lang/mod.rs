@@ -8,7 +8,7 @@ pub mod type_checker;
 
 use self::{
     term::{Fix, Term, TermKind, Variable},
-    type_checker::{Type, TypeChecker, TypeScheme},
+    type_checker::{Ctx, Type, TypeChecker, TypeScheme},
 };
 use crate::{
     collections::nonemptyvec::NonEmptyVec,
@@ -19,6 +19,7 @@ use std::{
     fmt,
     rc::Rc,
 };
+
 #[derive(Clone, Debug)]
 pub struct ModuleEntry {
     term: Rc<Term>,
@@ -31,7 +32,7 @@ pub struct Module {
 }
 
 impl Module {
-    fn load(src: &parser::Module) -> Result<Self> {
+    fn load(src: &parser::Module, mut ctx: Ctx) -> Result<Self> {
         let mut scope = HashMap::new();
 
         // check for duplicate names in the module scope
@@ -46,6 +47,7 @@ impl Module {
             }
         }
 
+        // Type-check the contents of this module.
         let mut rib_iter = scope
             .keys()
             .map(|var| (var.clone(), TypeScheme::new_var("M")));
@@ -54,7 +56,7 @@ impl Module {
             let mut rib = NonEmptyVec::new((var, ts));
             rib.extend(rib_iter);
 
-            let ctx = rib.into();
+            ctx.extend(rib);
             let checker = TypeChecker::new();
             let (_, items) = scope.into_iter().try_fold(
                 (ctx, HashMap::new()),
@@ -135,9 +137,9 @@ impl<V: fmt::Display> fmt::Display for Pattern<V> {
 }
 
 impl<V> Pattern<V> {
-    fn map<F, U>(&self, f: F) -> Pattern<U>
+    fn map<'a, F, U>(&'a self, f: F) -> Pattern<U>
     where
-        F: Copy + Fn(&V) -> U,
+        F: Copy + Fn(&'a V) -> U,
     {
         match self {
             Pattern::Var(var) => Pattern::Var(f(var)),

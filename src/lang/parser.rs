@@ -532,10 +532,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         if let Token::Ident(i) = t {
             Ok(i)
         } else {
-            Err(parse_error!(
-                self,
-                "identifier expected, but got {t} instead",
-            ))
+            Err(parse_error!(self, "identifier expected, but got {t} instead",))
         }
     }
 
@@ -685,11 +682,12 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 break;
             }
 
-            let next_min_prec = if info.assoc == OpAssoc::Left {
-                info.prec + 1
-            } else {
-                info.prec
-            };
+            let next_min_prec =
+                if info.assoc == OpAssoc::Left {
+                    info.prec + 1
+                } else {
+                    info.prec
+                };
 
             self.consume_operator()?;
 
@@ -873,10 +871,9 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                             rest.push(ty);
                         }
                         tok => {
-                            return Err(parse_error!(
-                                self,
-                                "')', or ',' expected, but got {tok} instead",
-                            ))
+                            return Err(
+                                parse_error!(self, "')', or ',' expected, but got {tok} instead",)
+                            )
                         }
                     }
                 }
@@ -928,7 +925,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         loop {
             let op = self.consume_operator()?;
             if self.ctx.table.iter().any(|(o, _)| *o == op) {
-                return Err(parse_error!(self, "operator {op} was already declared",));
+                return Err(parse_error!(self, "operator {op} was already declared"));
             }
             self.ctx.table.push((op, info.clone()));
 
@@ -972,7 +969,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                     module.decls.push((idents, term));
                 }
                 Token::End => break,
-                _ => return Err(parse_error!(self, "Couldn't parse a module declaration",)),
+                _ => return Err(parse_error!(self, "Couldn't parse module declaration")),
             }
         }
 

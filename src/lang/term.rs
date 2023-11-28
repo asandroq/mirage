@@ -240,12 +240,12 @@ pub(crate) enum Variable {
 }
 
 impl Variable {
-    pub fn global<S: ToString + ?Sized>(name: &S) -> Variable {
-        Self::Global(name.to_string())
+    pub fn global(name: impl Into<String>) -> Variable {
+        Self::Global(name.into())
     }
 
-    pub fn local<S: ToString + ?Sized>(name: &S) -> Variable {
-        let name = name.to_string();
+    pub fn local(name: impl Into<String>) -> Variable {
+        let name = name.into();
         if name == "_" {
             Variable::Local(name, 0)
         } else {

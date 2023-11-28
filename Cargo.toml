@@ -3,7 +3,12 @@ name = "mirage"
 version = "0.1.0"
 authors = ["Alex Silva <alex@unendli.ch>"]
 edition = "2021"
+rust-version = "1.74"
 
 [dependencies]
 rustyline = "12.0"
 thiserror = "1"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"

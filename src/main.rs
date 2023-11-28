@@ -1,5 +1,3 @@
-#![deny(clippy::all)]
-#![deny(clippy::pedantic)]
 #![allow(clippy::similar_names)]
 
 mod collections;
@@ -13,10 +11,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-fn main() -> Result<()> {
-    let mut interp = Interpreter::new();
-    interp.load_prelude()?;
-
+/// A Read-Eval-Print loop.
+fn repl(mut interp: Interpreter) -> Result<()> {
     let mut rl = DefaultEditor::new()?;
     let hist_path = if let Ok(home) = env::var("HOME") {
         Path::new(&home).join(".mirage_history.txt")
@@ -55,4 +51,19 @@ fn main() -> Result<()> {
 
     rl.save_history(&hist_path)?;
     Ok(())
+}
+
+fn main() -> Result<()> {
+    // Create a new interpreter with a preloaded prelude.
+    let mut interp = Interpreter::new();
+    interp.load_prelude()?;
+
+    // If given an argument, load the file as a module before entering the REPL.
+    let mut args = env::args();
+    args.next();
+    if let Some(input) = args.next() {
+        interp.load_file(&input)?;
+    }
+
+    repl(interp)
 }

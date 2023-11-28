@@ -8,7 +8,12 @@ use crate::{
     collections::{nonemptyvec::NonEmptyVec, sharedlist::SharedList},
     error::{Error, Result},
 };
-use std::{collections::VecDeque, rc::Rc};
+use std::{
+    collections::VecDeque,
+    fs::read_to_string,
+    path::Path,
+    rc::Rc,
+};
 
 type Pattern = super::Pattern<Variable>;
 
@@ -29,10 +34,23 @@ impl Interpreter {
         }
     }
 
+    pub fn load_file(&mut self, input: impl AsRef<Path>) -> Result<()> {
+        let name = input.as_ref().to_string_lossy().to_string();
+        let contents = read_to_string(input)?;
+
+        self.load_string(&contents, name)
+    }
+
     pub fn load_prelude(&mut self) -> Result<()> {
-        let mut parser = Parser::new(&mut self.parser_ctx, PRELUDE.chars(), "prelude".to_string());
+        self.load_string(PRELUDE, "prelude".to_string())
+    }
+
+    fn load_string(&mut self, contents: &str, context: String) -> Result<()> {
+        let (_, ctx) = self.extract();
+
+        let mut parser = Parser::new(&mut self.parser_ctx, contents.chars(), context);
         let src = parser.parse_module()?;
-        let module = Module::load(&src)?;
+        let module = Module::load(&src, ctx)?;
         self.modules.push(module);
 
         Ok(())
@@ -107,9 +125,9 @@ impl Interpreter {
                         }
                         val = Self::eval_term(body, &new_env)?;
                     } else {
-                        return Err(Error::RuntimeError(format!(
-                            "term {val} is not a closure but is being applied"
-                        )));
+                        return Err(Error::RuntimeError(
+                            format!("term {val} is not a closure but is being applied")
+                        ));
                     }
                 }
                 Ok(val)
@@ -127,9 +145,9 @@ impl Interpreter {
                         Self::eval_term(alter, env)
                     }
                 } else {
-                    Err(Error::RuntimeError(format!(
-                        "`if` guard must be a boolean, but {guard:?} was given",
-                    )))
+                    Err(Error::RuntimeError(
+                        format!("`if` guard must be a boolean, but {guard:?} was given",)
+                    ))
                 }
             }
             TermKind::Let(Let { pat, expr, body }) => {
@@ -162,9 +180,7 @@ impl Interpreter {
                         Ok(Rc::clone(&rest[*index - 2]))
                     }
                 } else {
-                    Err(Error::RuntimeError(
-                        format!("Cannot index non-tuple {v:?}",),
-                    ))
+                    Err(Error::RuntimeError(format!("Cannot index non-tuple {v:?}",)))
                 }
             }
             TermKind::BinOp(BinOp { oper, lhs, rhs }) => {
@@ -212,14 +228,14 @@ impl Interpreter {
                             _ => Err(Error::RuntimeError(format!("Unknown operator {oper}"))),
                         }
                     } else {
-                        Err(Error::RuntimeError(format!(
-                            "Right-hand side of operator is not an integer, it's {e2:?}",
-                        )))
+                        Err(Error::RuntimeError(
+                            format!("Right-hand side of operator is not an integer, it's {e2:?}",)
+                        ))
                     }
                 } else {
-                    Err(Error::RuntimeError(format!(
-                        "Left-hand side of operator is not an integer, it's {e1:?}",
-                    )))
+                    Err(Error::RuntimeError(
+                        format!("Left-hand side of operator is not an integer, it's {e1:?}",)
+                    ))
                 }
             }
         }
@@ -279,9 +295,7 @@ impl Interpreter {
                         )))
                     }
                 } else {
-                    Err(Error::RuntimeError(
-                        "Cannot match tuple pattern with value".to_string(),
-                    ))
+                    Err(Error::RuntimeError("Cannot match tuple pattern with value".to_string()))
                 }
             }
         }

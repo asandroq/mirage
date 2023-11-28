@@ -116,12 +116,9 @@ impl AstBuilder {
         })
     }
 
-    pub(crate) fn with_context<S>(self, context: &S) -> Self
-    where
-        S: ToString + ?Sized,
-    {
+    pub(crate) fn with_context(self, context: impl Into<String>) -> Self {
         let Self { kind, ctx: _, span } = self;
-        let ctx = context.to_string();
+        let ctx = context.into();
 
         Self {
             kind,
