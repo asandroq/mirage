@@ -36,14 +36,16 @@ impl Module {
         let mut scope = HashMap::new();
 
         // check for duplicate names in the module scope
-        for (names, ast) in &src.decls {
-            let (name, args) = names.parts();
-            let var = Variable::global(name);
-            let args = args.map(Variable::local);
-            if let Entry::Vacant(e) = scope.entry(var) {
-                e.insert((args, ast));
-            } else {
-                return Err(Error::DuplicateGlobal(name.clone()));
+        for decl in &src.decls {
+            if let parser::TopLvlDecl::Let(names, ast) = decl {
+                let (name, args) = names.parts();
+                let var = Variable::global(name);
+                let args = args.map(Variable::local);
+                if let Entry::Vacant(e) = scope.entry(var) {
+                    e.insert((args, ast));
+                } else {
+                    return Err(Error::DuplicateGlobal(name.clone()));
+                }
             }
         }
 

@@ -8,12 +8,7 @@ use crate::{
     collections::{nonemptyvec::NonEmptyVec, sharedlist::SharedList},
     error::{Error, Result},
 };
-use std::{
-    collections::VecDeque,
-    fs::read_to_string,
-    path::Path,
-    rc::Rc,
-};
+use std::{collections::VecDeque, fs::read_to_string, path::Path, rc::Rc};
 
 type Pattern = super::Pattern<Variable>;
 
@@ -125,9 +120,9 @@ impl Interpreter {
                         }
                         val = Self::eval_term(body, &new_env)?;
                     } else {
-                        return Err(Error::RuntimeError(
-                            format!("term {val} is not a closure but is being applied")
-                        ));
+                        return Err(Error::RuntimeError(format!(
+                            "term {val} is not a closure but is being applied"
+                        )));
                     }
                 }
                 Ok(val)
@@ -145,9 +140,9 @@ impl Interpreter {
                         Self::eval_term(alter, env)
                     }
                 } else {
-                    Err(Error::RuntimeError(
-                        format!("`if` guard must be a boolean, but {guard:?} was given",)
-                    ))
+                    Err(Error::RuntimeError(format!(
+                        "`if` guard must be a boolean, but {guard:?} was given",
+                    )))
                 }
             }
             TermKind::Let(Let { pat, expr, body }) => {
@@ -180,7 +175,9 @@ impl Interpreter {
                         Ok(Rc::clone(&rest[*index - 2]))
                     }
                 } else {
-                    Err(Error::RuntimeError(format!("Cannot index non-tuple {v:?}",)))
+                    Err(Error::RuntimeError(
+                        format!("Cannot index non-tuple {v:?}",),
+                    ))
                 }
             }
             TermKind::BinOp(BinOp { oper, lhs, rhs }) => {
@@ -228,14 +225,14 @@ impl Interpreter {
                             _ => Err(Error::RuntimeError(format!("Unknown operator {oper}"))),
                         }
                     } else {
-                        Err(Error::RuntimeError(
-                            format!("Right-hand side of operator is not an integer, it's {e2:?}",)
-                        ))
+                        Err(Error::RuntimeError(format!(
+                            "Right-hand side of operator is not an integer, it's {e2:?}",
+                        )))
                     }
                 } else {
-                    Err(Error::RuntimeError(
-                        format!("Left-hand side of operator is not an integer, it's {e1:?}",)
-                    ))
+                    Err(Error::RuntimeError(format!(
+                        "Left-hand side of operator is not an integer, it's {e1:?}",
+                    )))
                 }
             }
         }
@@ -295,7 +292,9 @@ impl Interpreter {
                         )))
                     }
                 } else {
-                    Err(Error::RuntimeError("Cannot match tuple pattern with value".to_string()))
+                    Err(Error::RuntimeError(
+                        "Cannot match tuple pattern with value".to_string(),
+                    ))
                 }
             }
         }

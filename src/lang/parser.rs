@@ -72,11 +72,13 @@ enum Token {
     Let,
     Letrec,
     Op(String),
+    Pipe,
     Pound,
     RParen,
     SemiColon,
     Then,
     ThickArrow,
+    Type,
     Unit,
 }
 
@@ -85,13 +87,18 @@ impl Token {
     fn starts_atom(&self) -> bool {
         matches!(
             self,
-            Token::Bool(_)
-                | Token::Ident(_)
-                | Token::Int(_)
+            Token::Bool(..)
+                | Token::Ident(..)
+                | Token::Int(..)
                 | Token::LParen
                 | Token::Pound
                 | Token::Unit
         )
+    }
+
+    /// Predicate for tokens that can start types.
+    fn starts_type(&self) -> bool {
+        matches!(self, Token::Unit | Token::Ident(..) | Token::LParen)
     }
 }
 
@@ -117,11 +124,13 @@ impl fmt::Display for Token {
             Token::Letrec => write!(f, "keyword 'letrec'"),
             Token::LParen => write!(f, "'('"),
             Token::Op(o) => write!(f, "operator '{o}'"),
+            Token::Pipe => write!(f, "'|'"),
             Token::Pound => write!(f, "'#'"),
             Token::RParen => write!(f, "')'"),
             Token::SemiColon => write!(f, "';'"),
             Token::Then => write!(f, "keyword 'then'"),
             Token::ThickArrow => write!(f, "'=>'"),
+            Token::Type => write!(f, "keyword 'type'"),
             Token::Unit => write!(f, "'()'"),
         }
     }
@@ -325,6 +334,10 @@ impl<I: Iterator<Item = char>> Lexer<I> {
                     }
                     return Ok(Token::LParen);
                 }
+                '|' => {
+                    self.next();
+                    return Ok(Token::Pipe);
+                }
                 '#' => {
                     self.next();
                     return Ok(Token::Pound);
@@ -368,6 +381,7 @@ impl<I: Iterator<Item = char>> Lexer<I> {
                             "letrec" => Token::Letrec,
                             "then" => Token::Then,
                             "true" => Token::Bool(true),
+                            "type" => Token::Type,
                             _ => Token::Ident(ident),
                         }
                     };
@@ -388,13 +402,32 @@ impl<I: Iterator<Item = char>> Lexer<I> {
 
 #[derive(Debug)]
 pub(crate) struct Module {
-    pub(crate) decls: Vec<(NonEmptyVec<String>, Ast)>,
+    pub(crate) decls: Vec<TopLvlDecl>,
 }
 
 impl Module {
     pub fn new() -> Self {
         Self { decls: Vec::new() }
     }
+
+    pub fn add_let(&mut self, names: NonEmptyVec<String>, term: Ast) {
+        self.decls.push(TopLvlDecl::Let(names, term));
+    }
+
+    pub fn add_variant(
+        &mut self,
+        name: String,
+        vars: Vec<String>,
+        arms: NonEmptyVec<(String, Vec<Type>)>,
+    ) {
+        self.decls.push(TopLvlDecl::Variant(name, vars, arms));
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum TopLvlDecl {
+    Let(NonEmptyVec<String>, Ast),
+    Variant(String, Vec<String>, NonEmptyVec<(String, Vec<Type>)>),
 }
 
 /// Operator associativity.
@@ -532,7 +565,10 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         if let Token::Ident(i) = t {
             Ok(i)
         } else {
-            Err(parse_error!(self, "identifier expected, but got {t} instead",))
+            Err(parse_error!(
+                self,
+                "identifier expected, but got {t} instead",
+            ))
         }
     }
 
@@ -682,12 +718,11 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 break;
             }
 
-            let next_min_prec =
-                if info.assoc == OpAssoc::Left {
-                    info.prec + 1
-                } else {
-                    info.prec
-                };
+            let next_min_prec = if info.assoc == OpAssoc::Left {
+                info.prec + 1
+            } else {
+                info.prec
+            };
 
             self.consume_operator()?;
 
@@ -841,6 +876,7 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
 
     // type : () type'
     //      | ident type'
+    //      | '(' type ')' type'
     //      | '(' type ',' type ',' type... ')' type'
     fn parse_type(&mut self) -> Result<Type> {
         match self.peek_token()? {
@@ -853,27 +889,35 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                 self.parse_type_prime(Type::Ident(ident))
             }
             Token::LParen => {
-                self.consume_token(Token::LParen)?;
+                self.next_token()?;
                 let fst = self.parse_type()?;
-                self.consume_token(Token::Comma)?;
-                let snd = self.parse_type()?;
-                let mut rest = Vec::new();
-                loop {
-                    match self.peek_token()? {
-                        Token::RParen => {
-                            self.consume_token(Token::RParen)?;
-                            let ty = Type::Tuple(Box::new(fst), Box::new(snd), rest);
-                            return self.parse_type_prime(ty);
-                        }
-                        Token::Comma => {
-                            self.consume_token(Token::Comma)?;
-                            let ty = self.parse_type()?;
-                            rest.push(ty);
-                        }
-                        tok => {
-                            return Err(
-                                parse_error!(self, "')', or ',' expected, but got {tok} instead",)
-                            )
+                if self.peek_token()? == Token::RParen {
+                    // A type enclosed in parentheses.
+                    self.next_token()?;
+                    self.parse_type_prime(fst)
+                } else {
+                    // The type of a tuple.
+                    self.consume_token(Token::Comma)?;
+                    let snd = self.parse_type()?;
+                    let mut rest = Vec::new();
+                    loop {
+                        match self.peek_token()? {
+                            Token::RParen => {
+                                self.next_token()?;
+                                let ty = Type::Tuple(Box::new(fst), Box::new(snd), rest);
+                                return self.parse_type_prime(ty);
+                            }
+                            Token::Comma => {
+                                self.next_token()?;
+                                let ty = self.parse_type()?;
+                                rest.push(ty);
+                            }
+                            tok => {
+                                return Err(parse_error!(
+                                    self,
+                                    "')', or ',' expected, but got {tok} instead",
+                                ))
+                            }
                         }
                     }
                 }
@@ -960,13 +1004,23 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
                     self.parse_fixdecl()?;
                     self.consume_token(Token::SemiColon)?;
                 }
+                Token::Type => {
+                    self.consume_token(Token::Type)?;
+                    let name_and_vars = self.parse_unique_identifiers()?;
+                    let (name, vars) = name_and_vars.into_parts();
+                    let vars = vars.collect::<Vec<_>>();
+                    self.consume_token(Token::Equals)?;
+                    let arms = self.parse_variant_arms()?;
+                    self.consume_token(Token::SemiColon)?;
+                    module.add_variant(name, vars, arms);
+                }
                 Token::Let => {
                     self.consume_token(Token::Let)?;
-                    let idents = self.parse_unique_identifiers()?;
+                    let names = self.parse_unique_identifiers()?;
                     self.consume_token(Token::Equals)?;
                     let term = self.parse_term()?;
                     self.consume_token(Token::SemiColon)?;
-                    module.decls.push((idents, term));
+                    module.add_let(names, term);
                 }
                 Token::End => break,
                 _ => return Err(parse_error!(self, "Couldn't parse module declaration")),
@@ -1032,6 +1086,21 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         parse(self, &mut HashSet::new())
     }
 
+    fn parse_types(&mut self) -> Result<Vec<Type>> {
+        let mut types = Vec::new();
+        loop {
+            let tok = self.peek_token()?;
+            if tok.starts_type() {
+                let ty = self.parse_type()?;
+                types.push(ty);
+            } else {
+                break;
+            }
+        }
+
+        Ok(types)
+    }
+
     fn parse_unique_identifiers(&mut self) -> Result<NonEmptyVec<String>> {
         let var = self.consume_identifier()?;
         let mut vars = NonEmptyVec::new(var);
@@ -1058,6 +1127,31 @@ impl<'ctx, I: Iterator<Item = char>> Parser<'ctx, I> {
         }
 
         Ok(vars)
+    }
+
+    fn parse_variant_arms(&mut self) -> Result<NonEmptyVec<(String, Vec<Type>)>> {
+        let tok = self.peek_token()?;
+
+        // A pipe symbol preceding the first variant arm is optional.
+        if tok == Token::Pipe {
+            self.next_token()?;
+        }
+        let name = self.consume_identifier()?;
+        let types = self.parse_types()?;
+
+        let mut arms = NonEmptyVec::new((name, types));
+        loop {
+            if self.peek_token()? == Token::Pipe {
+                self.next_token()?;
+                let name = self.consume_identifier()?;
+                let types = self.parse_types()?;
+                arms.push((name, types));
+            } else {
+                break;
+            }
+        }
+
+        Ok(arms)
     }
 }
 

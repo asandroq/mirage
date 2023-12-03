@@ -20,81 +20,80 @@ pub(crate) struct TypeChecker {
 
 impl TypeChecker {
     pub fn new() -> Self {
-        let oper_table =
-            vec![
-                (
-                    "+",
-                    OpInfo {
-                        ltype: Type::Int,
-                        rtype: Type::Int,
-                        ttype: Type::Int,
-                    },
-                ),
-                (
-                    "-",
-                    OpInfo {
-                        ltype: Type::Int,
-                        rtype: Type::Int,
-                        ttype: Type::Int,
-                    },
-                ),
-                (
-                    "*",
-                    OpInfo {
-                        ltype: Type::Int,
-                        rtype: Type::Int,
-                        ttype: Type::Int,
-                    },
-                ),
-                (
-                    "/",
-                    OpInfo {
-                        ltype: Type::Int,
-                        rtype: Type::Int,
-                        ttype: Type::Int,
-                    },
-                ),
-                (
-                    "==",
-                    OpInfo {
-                        ltype: Type::Int,
-                        rtype: Type::Int,
-                        ttype: Type::Bool,
-                    },
-                ),
-                (
-                    "<",
-                    OpInfo {
-                        ltype: Type::Int,
-                        rtype: Type::Int,
-                        ttype: Type::Bool,
-                    },
-                ),
-                (
-                    ">",
-                    OpInfo {
-                        ltype: Type::Int,
-                        rtype: Type::Int,
-                        ttype: Type::Bool,
-                    },
-                ),
-                (
-                    "<=",
-                    OpInfo {
-                        ltype: Type::Int,
-                        rtype: Type::Int,
-                        ttype: Type::Bool,
-                    },
-                ),
-                (
-                    ">=",
-                    OpInfo {
-                        ltype: Type::Int,
-                        rtype: Type::Int,
-                        ttype: Type::Bool,
-                    },
-                ),
-            ];
+        let oper_table = vec![
+            (
+                "+",
+                OpInfo {
+                    ltype: Type::Int,
+                    rtype: Type::Int,
+                    ttype: Type::Int,
+                },
+            ),
+            (
+                "-",
+                OpInfo {
+                    ltype: Type::Int,
+                    rtype: Type::Int,
+                    ttype: Type::Int,
+                },
+            ),
+            (
+                "*",
+                OpInfo {
+                    ltype: Type::Int,
+                    rtype: Type::Int,
+                    ttype: Type::Int,
+                },
+            ),
+            (
+                "/",
+                OpInfo {
+                    ltype: Type::Int,
+                    rtype: Type::Int,
+                    ttype: Type::Int,
+                },
+            ),
+            (
+                "==",
+                OpInfo {
+                    ltype: Type::Int,
+                    rtype: Type::Int,
+                    ttype: Type::Bool,
+                },
+            ),
+            (
+                "<",
+                OpInfo {
+                    ltype: Type::Int,
+                    rtype: Type::Int,
+                    ttype: Type::Bool,
+                },
+            ),
+            (
+                ">",
+                OpInfo {
+                    ltype: Type::Int,
+                    rtype: Type::Int,
+                    ttype: Type::Bool,
+                },
+            ),
+            (
+                "<=",
+                OpInfo {
+                    ltype: Type::Int,
+                    rtype: Type::Int,
+                    ttype: Type::Bool,
+                },
+            ),
+            (
+                ">=",
+                OpInfo {
+                    ltype: Type::Int,
+                    rtype: Type::Int,
+                    ttype: Type::Bool,
+                },
+            ),
+        ];
 
         Self { oper_table }
     }
@@ -341,17 +340,16 @@ impl TypeChecker {
         let mut css = ConstrSet::new();
         css.append(cs1);
         css.append(cs2);
-        let (ctx, rest, tys, css) =
-            tuple.rest.iter().try_fold(
-                (ctx, Vec::new(), Vec::new(), css),
-                |(ctx, mut ts, mut tys, mut css), ast| {
-                    let (ctx, t, ty, cs) = self.check(ast, ctx)?;
-                    ts.push(t);
-                    tys.push(ty);
-                    css.append(cs);
-                    Ok::<_, Error>((ctx, ts, tys, css))
-                },
-            )?;
+        let (ctx, rest, tys, css) = tuple.rest.iter().try_fold(
+            (ctx, Vec::new(), Vec::new(), css),
+            |(ctx, mut ts, mut tys, mut css), ast| {
+                let (ctx, t, ty, cs) = self.check(ast, ctx)?;
+                ts.push(t);
+                tys.push(ty);
+                css.append(cs);
+                Ok::<_, Error>((ctx, ts, tys, css))
+            },
+        )?;
 
         Ok((
             ctx,
@@ -481,9 +479,9 @@ impl TypeChecker {
                             )))
                         }
                     }
-                    _ => {
-                        Err(Error::PatternMatch("Expression doesn't have a tuple type".to_string()))
-                    }
+                    _ => Err(Error::PatternMatch(
+                        "Expression doesn't have a tuple type".to_string(),
+                    )),
                 }?;
 
                 let (mut matches, fst_cs) = Self::match_pattern(fst, fst_ty, ctx)?;
@@ -531,15 +529,15 @@ impl ConstrSet {
 
     /// Apply a type substitution to all types in a constraints set.
     fn subst_constraints(self, var: &Variable, ttype: &Type) -> Self {
-        let vec =
-            self.0
-                .into_iter()
-                .map(|(lhs, rhs)| {
-                    let lhs = lhs.apply_one(var, ttype);
-                    let rhs = rhs.apply_one(var, ttype);
-                    (lhs, rhs)
-                })
-                .collect();
+        let vec = self
+            .0
+            .into_iter()
+            .map(|(lhs, rhs)| {
+                let lhs = lhs.apply_one(var, ttype);
+                let rhs = rhs.apply_one(var, ttype);
+                (lhs, rhs)
+            })
+            .collect();
 
         Self(vec)
     }
@@ -551,17 +549,17 @@ impl ConstrSet {
             if lhs != rhs {
                 if let Type::Var(v) = lhs {
                     if rhs.vars().contains(&v) {
-                        return Err(
-                            Error::InfiniteType(format!("Type variable {v} refers to itself",))
-                        );
+                        return Err(Error::InfiniteType(format!(
+                            "Type variable {v} refers to itself",
+                        )));
                     }
                     cs = cs.subst_constraints(&v, &rhs);
                     subst.push((v, rhs));
                 } else if let Type::Var(v) = rhs {
                     if lhs.vars().contains(&v) {
-                        return Err(
-                            Error::InfiniteType(format!("Type variable {v} refers to itself",))
-                        );
+                        return Err(Error::InfiniteType(format!(
+                            "Type variable {v} refers to itself",
+                        )));
                     }
                     cs = cs.subst_constraints(&v, &lhs);
                     subst.push((v, lhs));
@@ -570,7 +568,9 @@ impl ConstrSet {
                         cs.0.push((*lhs1, *rhs1));
                         cs.0.push((*lhs2, *rhs2));
                     } else {
-                        return Err(Error::TypeMismatch(format!("{rhs} is not a function type",)));
+                        return Err(Error::TypeMismatch(
+                            format!("{rhs} is not a function type",),
+                        ));
                     }
                 } else if let Type::Tuple(lfst, lsnd, lrest) = lhs {
                     if let Type::Tuple(rfst, rsnd, rrest) = rhs {
@@ -583,9 +583,9 @@ impl ConstrSet {
                         return Err(Error::TypeMismatch(format!("{rhs} is not a tuple type",)));
                     }
                 } else {
-                    return Err(
-                        Error::TypeMismatch(format!("Cannot unify the types {lhs} and {rhs}",))
-                    );
+                    return Err(Error::TypeMismatch(format!(
+                        "Cannot unify the types {lhs} and {rhs}",
+                    )));
                 }
             }
         }
